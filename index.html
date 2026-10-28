@@ -130,7 +130,7 @@ input[type=number]{width:110px;background:#1b1b20;border:1px solid var(--line);b
 <script src="mp4-muxer.js"></script>
 <script>
 'use strict';
-const VERSION = '1.1.1';
+const VERSION = '1.2.0';
 
 // ---------- 乱数・小道具 ----------
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
@@ -287,6 +287,9 @@ const IRIS=[468,473];
 const BLINK=[[[246,161,160,159,158,157,173],[7,163,144,145,153,154,155]],[[466,388,387,386,385,384,398],[249,390,373,374,380,381,382]]];
 // 顔の輪郭（ぐるりと一周）
 const OVAL=[10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109];
+// 髪の形：測るときの頭の中ほど（前から見た位置）と、髪の色のます目（前から見た範囲と細かさ）
+const HAIR_C=[0,.08],HG={x0:-1.5,y0:-1,st:.05,nx:61,ny:57};
+function hairGrid(t){const g=[];for(let i=0;i<t.length;){if(t[i]==='-'){g.push(null);i++;}else{g.push(C(...[0,1,2].map(q=>parseInt(t[i+q],16)*17)));i+=3;}}return g;}
 const PHOTO_LINES=[[255,120,210],[255,240,120],[150,190,255],[255,160,110]];
 // 輪の中を、中心から扇形に塗る（線画では外の輪だけ線にする）
 function fan(m,pts,col,dz){
@@ -307,8 +310,18 @@ function photoFace(m,K,o){
   for(let k=1;k<=9;k++){const t=k/9;rows.push(ov.map(p=>{const v0=sub(p,c),v1=sub(back,c),r0=Math.hypot(...v0),r1=Math.hypot(...v1),a=norm(v0),b=norm(v1);
     const om=Math.acos(clamp(dot(a,b),-1,1)),so=Math.sin(om)||1e-6,d=a.map((q,i)=>(Math.sin((1-t)*om)*q+Math.sin(t*om)*b[i])/so),r=lerp(r0,r1,t)*(1+.2*Math.sin(Math.PI*t));
     return c.map((q,i)=>q+d[i]*r);}));}
-  for(let k=0;k<9;k++)for(let i=0;i<ov.length;i++){const j=(i+1)%ov.length,a=rows[k][i],b=rows[k][j],cc=rows[k+1][j],d=rows[k+1][i],my=(a[1]+cc[1])/2;
-    m.quad(a,b,cc,d,my>.45||(k>2&&my>-.25)?K.hair:K.skin);}
+  // 髪の形：輪郭の各点から後ろへ回る列を、前から見た外形が写真の髪の外側に合うように、頭の中ほどから広げる（後ろの一点へは元に戻す）
+  const HR=F.hairR,nO=ov.length;
+  if(HR){let f=HR.map((h,i)=>{if(!h)return 1;let mx=0;for(let k=1;k<=9;k++)mx=Math.max(mx,Math.hypot(rows[k][i][0]-HAIR_C[0],rows[k][i][1]-HAIR_C[1]));return clamp(h/mx,.9,1.6);});
+    for(let n=0;n<2;n++)f=f.map((v,i)=>(f[(i+nO-1)%nO]+2*v+f[(i+1)%nO])/4);
+    for(let k=1;k<=9;k++){const w=k<=6?1:(9-k)/3;for(let i=0;i<nO;i++){const p=rows[k][i],g=1+(f[i]-1)*w;p[0]=HAIR_C[0]+(p[0]-HAIR_C[0])*g;p[1]=HAIR_C[1]+(p[1]-HAIR_C[1])*g;}}}
+  for(let k=0;k<9;k++)for(let i=0;i<nO;i++){const j=(i+1)%nO,a=rows[k][i],b=rows[k][j],cc=rows[k+1][j],d=rows[k+1][i],my=(a[1]+cc[1])/2;
+    // 髪の形があるときは、輪郭から後ろへ回った所の耳より上も髪（もみあげ・後ろ髪）
+    let col=my>.45||(k>2&&my>-.25)||(HR&&(HR[i]&&HR[j]||k>0&&my>K.earY+.05))?K.hair:K.skin;
+    // 前を向いた面は、写真の髪の色（ます目）を混ぜて、つやのむらを出す
+    if(F.hg){const ce=[0,1,2].map(q=>(a[q]+b[q]+cc[q]+d[q])/4),nn=norm(cross(sub(cc,a),sub(d,b)));let nz=nn[2];if(dot(nn,sub(ce,c))<0)nz=-nz;
+      const gi=Math.round((ce[0]-HG.x0)/HG.st),gj=Math.round((ce[1]-HG.y0)/HG.st),hc=nz>.45&&gi>=0&&gj>=0&&gi<HG.nx&&gj<HG.ny?F.hg[gj*HG.nx+gi]:null;if(hc)col=col.map((v,q)=>lerp(v,hc[q],.6));}
+    m.quad(a,b,cc,d,col);}
   fan(m,MOUTH_IN.map(i=>P[i]),C(60,16,22),-.03);
   EYES.forEach((loop,e)=>{fan(m,loop.map(i=>P[i]),C(232,230,224),-.012);
     if(n>IRIS[e]+4){const c=P[IRIS[e]],r=Math.hypot(P[IRIS[e]+1][0]-P[IRIS[e]+3][0],P[IRIS[e]+1][1]-P[IRIS[e]+3][1])/2*(1-o.blink*.9),gx=o.gaze[0]*.05,gy=o.gaze[1]*.04;
@@ -322,11 +335,13 @@ async function landmarker(){
   const v=await import(new URL(MP+'vision_bundle.mjs',location.href).href);
   const fs=await v.FilesetResolver.forVisionTasks(new URL(MP+'wasm',location.href).href);
   const lm=await v.FaceLandmarker.createFromOptions(fs,{baseOptions:{modelAssetPath:new URL(MP+'face_landmarker.task',location.href).href},runningMode:'IMAGE',numFaces:1});
-  return faceLm={v,lm};
+  // 髪だけを切り抜く仕組み。読めなくても顔は作れるようにする（髪の形は作らない）
+  let seg=null;try{seg=await v.ImageSegmenter.createFromOptions(fs,{baseOptions:{modelAssetPath:new URL(MP+'hair_segmenter.tflite',location.href).href},runningMode:'IMAGE',outputConfidenceMasks:true,outputCategoryMask:false});}catch(e){console.error(e);}
+  return faceLm={v,lm,seg};
 }
 // 写真 1 枚から、顔の形（点・三角形）と色を作る。傾きを直し、あごの高さと鼻先の前後を頭に合わせる
 async function photoFromFile(file){
-  const img=await createImageBitmap(file),{v,lm}=await landmarker(),res=lm.detect(img);
+  const img=await createImageBitmap(file),{v,lm,seg}=await landmarker(),res=lm.detect(img);
   if(!res.faceLandmarks||!res.faceLandmarks.length)throw new Error('顔が見つかりませんでした');
   const L=res.faceLandmarks[0],W=img.width,H=img.height,cv=document.createElement('canvas');cv.width=W;cv.height=H;
   const g=cv.getContext('2d');g.drawImage(img,0,0);const px=g.getImageData(0,0,W,H).data;
@@ -348,9 +363,22 @@ async function photoFromFile(file){
     const sk=[0,1,2].map(q=>[0,1,2].map(k=>at(fh*k*.015)[q]).sort((a,b)=>a-b)[1]);
     for(let d=fh*.05;d<fh*.5;d+=fh*.01){const c=at(d);if(Math.hypot(c[0]-sk[0],c[1]-sk[1],c[2]-sk[2])>90){const cs=[...Array(5)].map((_,k)=>at(d+fh*(.03+k*.02)));return[0,1,2].map(q=>cs.map(c=>c[q]).sort((a,b)=>a-b)[2]);}}
     return[44,36,30];};
+  // 髪の形：写真の髪の所を切り抜き、顔の輪郭の各点から（頭の中ほどから見て）外へたどって、髪の外側までの長さを測る。前から見える髪の色は細かいます目で覚える
+  let hairR=null,hg=null;
+  if(seg){const r=seg.segment(img),m=r.confidenceMasks[r.confidenceMasks.length-1],mw=m.width,mh=m.height,conf=m.getAsFloat32Array().slice();r.close?.();
+    const toImg=(X,Y)=>{const rx=X/s,ry=-(Y-dy)/s;return[rx*Math.cos(ang)-ry*Math.sin(ang)+cx,rx*Math.sin(ang)+ry*Math.cos(ang)+cy];};
+    const isHair=(X,Y,th=.5)=>{const[u,w]=toImg(X,Y),i=Math.round(u/W*mw),j=Math.round(w/H*mh);return i>=0&&j>=0&&i<mw&&j<mh&&conf[j*mw+i]>th;};
+    hairR=OVAL.map(i=>{const p=Q[i],ex=p[0]-HAIR_C[0],ey=p[1]-HAIR_C[1],r0=Math.hypot(ex,ey),u=[ex/r0,ey/r0];let on=-1,last=-1;
+      for(let t=-.05;t<1.2;t+=.01){if(isHair(p[0]+u[0]*t,p[1]+u[1]*t)){if(on<0)on=t;last=t;}else if(on>=0&&t-last>.04)break;if(on<0&&t>.35)break;}
+      return last>0?r0+last:0;});
+    hairR=hairR.map((v,i,a)=>{if(!v)return 0;const n=a.length,l=a[(i+n-1)%n]||v,rr=a[(i+1)%n]||v;return +((l+2*v+rr)/4).toFixed(3);});
+    if(hairR.filter(v=>v).length<3)hairR=null;
+    else{hg='';const h=HG.st/3;for(let j=0;j<HG.ny;j++)for(let i=0;i<HG.nx;i++){const X=HG.x0+i*HG.st,Y=HG.y0+j*HG.st;if(!isHair(X,Y,.85)){hg+='-';continue;}
+      const k=[0,0,0];for(const[ox,oy]of[[0,0],[h,h],[-h,h],[h,-h],[-h,-h]]){const c=col(...toImg(X+ox,Y+oy));for(let q=0;q<3;q++)k[q]+=c[q];}
+      hg+=k.map(v=>Math.min(15,Math.round(v/5*1.15/17)).toString(16)).join('');}}}
   const fh=P[152][1]-P[10][1],th=document.createElement('canvas');th.width=th.height=48;
   th.getContext('2d').drawImage(cv,cx-fh*.6,P[10][1]-fh*.15,fh*1.2,fh*1.2,0,0,48,48);
-  return{pts:Q.flat().map(v=>+v.toFixed(4)),tris,cols,skin:col(P[50][0],P[50][1]),lip:col(P[17][0],P[17][1]),hair:hairCol(),hw:+((Q[454][0]-Q[234][0])/2).toFixed(3),earY:+((Q[234][1]+Q[454][1])/2).toFixed(3),earZ:+((Q[234][2]+Q[454][2])/2-.25).toFixed(3),thumb:th.toDataURL('image/jpeg',.7)};
+  return{pts:Q.flat().map(v=>+v.toFixed(4)),tris,cols,skin:col(P[50][0],P[50][1]),lip:col(P[17][0],P[17][1]),hair:hairCol(),hw:+((Q[454][0]-Q[234][0])/2).toFixed(3),earY:+((Q[234][1]+Q[454][1])/2).toFixed(3),earZ:+((Q[234][2]+Q[454][2])/2-.25).toFixed(3),thumb:th.toDataURL('image/jpeg',.7),hairR,hg};
 }
 // 写真の顔を、顔の選びに足す（p1〜p4）。読み取った結果はブラウザに覚える
 let photos=[];
@@ -359,7 +387,7 @@ function photoKinds(){
   for(let i=KIND_ORDER.length-1;i>=0;i--)if(KIND_ORDER[i][0]==='p')KIND_ORDER.splice(i,1);
   photos.forEach((d,i)=>{const k='p'+(i+1),c=v=>C(...v);
     KINDS[k]={...KINDS.a,name:`写真 ${i+1}`,W:d.hw*1.02,earY:d.earY??0,earZ:d.earZ??-.06,skin:c(d.skin),hair:c(d.hair),lip:c(d.lip),line:PHOTO_LINES[i%4],acc:PHOTO_LINES[i%4],
-      photo:{pts:Float32Array.from(d.pts),tris:d.tris,cols:d.cols.map(c),hw:d.hw},thumb:d.thumb};
+      photo:{pts:Float32Array.from(d.pts),tris:d.tris,cols:d.cols.map(c),hw:d.hw,hairR:d.hairR||null,hg:d.hg?hairGrid(d.hg):null},thumb:d.thumb};
     KIND_ORDER.push(k);});
 }
 try{photos=JSON.parse(localStorage.getItem('endless-human-photos')||'[]');}catch(e){photos=[];}
