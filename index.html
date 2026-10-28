@@ -131,7 +131,7 @@ input[type=number]{width:110px;background:#1b1b20;border:1px solid var(--line);b
 <script src="mp4-muxer.js"></script>
 <script>
 'use strict';
-const VERSION = '1.7.0';
+const VERSION = '1.8.0';
 
 // ---------- 乱数・小道具 ----------
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
@@ -312,6 +312,10 @@ const PH_L=[-.458,.504,.733];
 // 顔の点ごとに、輪郭（OVAL）から三角形のつながりで何段内側か
 function ringDepth(tris,n){const adj=[...Array(n)].map(()=>[]);for(let t=0;t<tris.length;t+=3)for(let a=0;a<3;a++)for(let b=0;b<3;b++)if(a!==b)adj[tris[t+a]].push(tris[t+b]);
   const d=new Array(n).fill(99),q=[...OVAL];for(const i of OVAL)d[i]=0;for(let h=0;h<q.length;h++)for(const j of adj[q[h]])if(d[j]>d[q[h]]+1){d[j]=d[q[h]]+1;q.push(j);}return d;}
+// 口の穴をふさいでいる三角形を除く（点のつながりから拾った三角形には、上唇の内側と下唇の内側をまたぐものがある）
+const LIP_UP=new Set([191,80,81,82,13,312,311,310,415]),LIP_LO=new Set([324,318,402,317,14,87,178,88,95]),LIP_IN=new Set(MOUTH_IN);
+function mouthTris(tris,cols){const t2=[],c2=[];for(let t=0;t<tris.length;t+=3){const v=tris.slice(t,t+3);
+  if(v.every(i=>LIP_IN.has(i))||(v.some(i=>LIP_UP.has(i))&&v.some(i=>LIP_LO.has(i))))continue;t2.push(...v);c2.push(cols[t/3]);}return{tris:t2,cols:c2};}
 function sideGrid(t){const g=[];for(let i=0;i<t.length;){if(t[i]==='-'){g.push(null);i++;}else{const c=unhex3(t.slice(i+1,i+4));c.hair=t[i]==='h';g.push(c);i+=4;}}return g;}
 function hairGrid(t){const g=[];for(let i=0;i<t.length;){if(t[i]==='-'){g.push(null);i++;}else{g.push(C(...[0,1,2].map(q=>parseInt(t[i+q],16)*17)));i+=3;}}return g;}
 const PHOTO_LINES=[[255,120,210],[255,240,120],[150,190,255],[255,160,110]];
@@ -324,8 +328,9 @@ function fan(m,pts,col,dz){
 function photoFace(m,K,o){
   const F=K.photo,n=F.pts.length/3,P=new Array(n),y0=(F.pts[13*3+1]+F.pts[14*3+1])/2,chinY=F.pts[152*3+1],jr=o.jit?mulberry32(o.seed+1):null;
   for(let i=0;i<n;i++){let x=F.pts[i*3],y=F.pts[i*3+1],z=F.pts[i*3+2];
-    // 口を開ける：唇の合わせ目より下（あご）を、顔の中ほどほど大きく下げる
-    if(o.open>0&&y<y0-.004&&y>chinY-.25){const w=Math.exp(-((x/(F.hw*.55))**4)),f=clamp((y0-y)/.12,0,1);y-=o.open*.2*w*(.35+.65*f);z-=o.open*.03*w;}
+    // 口を開ける：唇の合わせ目より下（下唇とあご）を、顔の中ほどほど大きく下げる（下唇とあごはほぼ一緒に動き、伸びるのは口の端のまわり）
+    // （写真は口を閉じているので、下唇の内側のふちは上唇と同じ高さにある。それも下へ動かす。上唇の内側と口の端は動かさない）
+    if(o.open>0&&(y<y0-.004||LIP_LO.has(i))&&!LIP_UP.has(i)&&i!==78&&i!==308&&y>chinY-.25){const w=Math.exp(-((x/(F.hw*.55))**4)),f=clamp((y0-y)/.06,0,1);y-=o.open*.2*w*(.85+.15*f);z-=o.open*.03*w;}
     if(jr){x+=(jr()-.5)*o.jit;y+=(jr()-.5)*o.jit;z+=(jr()-.5)*o.jit;}
     P[i]=[x,y,z];}
   if(o.blink>0)for(const[up,lo]of BLINK)for(let k=0;k<up.length;k++){const a=P[up[k]],b=P[lo[k]],t=o.blink*.85;P[up[k]]=a.map((v,q)=>lerp(v,b[q],t));}
@@ -365,7 +370,16 @@ function photoFace(m,K,o){
     const ws=cand.reduce((t,x)=>t+x[1],0),sh=.5+.62*Math.max(0,dot(nn,PH_L));
     m.quad(a,b,cc,d,[0,1,2].map(q=>cand.reduce((t,x)=>t+x[0][q]*x[1],0)/ws*sh),1);}
   }
-  fan(m,MOUTH_IN.map(i=>P[i]),C(60,16,22),-.03);
+  // 口の中：唇の内側の輪から奥の一点へ、暗い赤のおわん（奥ほど暗く）。上の歯は上唇の内側の少し奥から下へ、舌は下唇の内側の奥に置く
+  if(F.ovc){const R=MOUTH_IN.map(i=>P[i]),mc=[0,1,2].map(q=>R.reduce((a,p)=>a+p[q],0)/R.length),mw=Math.hypot(R[0][0]-R[10][0],R[0][1]-R[10][1]),bk=[mc[0],mc[1]-.03,mc[2]-mw*.55];
+    R.forEach((p,q)=>{const p2=R[(q+1)%R.length],mid=p.map((v,k)=>lerp(v,bk[k],.45)),mid2=p2.map((v,k)=>lerp(v,bk[k],.45));
+      m.quad(p,p2,mid2,mid,C(64,20,24),1);m.tri(mid,mid2,bk,C(18,6,7),1,2|4);});
+    const up=[78,191,80,81,82,13,312,311,310,415,308].map(i=>P[i]),th=mw*.11;
+    for(let q=0;q<up.length-1;q++){const a=up[q],b=up[q+1],sa=Math.sin(q/(up.length-1)*Math.PI),sb=Math.sin((q+1)/(up.length-1)*Math.PI),d=mw*.05;
+      const A=[a[0],a[1],a[2]-d],B=[b[0],b[1],b[2]-d],A2=[a[0],a[1]-th*sa,a[2]-d*1.2],B2=[b[0],b[1]-th*sb,b[2]-d*1.2];m.quad(A,B,B2,A2,C(214,206,190).map(v=>v*(.75+.25*Math.min(sa,sb))),1);}
+    const lo=[308,324,318,402,317,14,87,178,88,95,78].map(i=>P[i]),tg=lo.map(p=>[lerp(p[0],mc[0],.3),p[1]+mw*.02,lerp(p[2],bk[2],.5)]);
+    fan(m,tg,C(104,44,50),0);}
+  else fan(m,MOUTH_IN.map(i=>P[i]),C(60,16,22),-.03);
   if(!F.ovc){EYES.forEach((loop,e)=>{fan(m,loop.map(i=>P[i]),C(232,230,224),-.012);
     if(n>IRIS[e]+4){const c=P[IRIS[e]],r=Math.hypot(P[IRIS[e]+1][0]-P[IRIS[e]+3][0],P[IRIS[e]+1][1]-P[IRIS[e]+3][1])/2*(1-o.blink*.9),gx=o.gaze[0]*.05,gy=o.gaze[1]*.04;
       fan(m,[...Array(10)].map((_,k)=>[c[0]+gx+Math.cos(k/10*6.283)*r,c[1]+gy+Math.sin(k/10*6.283)*r*(1-o.blink*.9),c[2]]),C(40,34,30),-.006);}});
@@ -518,9 +532,9 @@ let photos=[];
 function photoKinds(){
   for(const k of Object.keys(KINDS))if(k[0]==='p')delete KINDS[k];
   for(let i=KIND_ORDER.length-1;i>=0;i--)if(KIND_ORDER[i][0]==='p')KIND_ORDER.splice(i,1);
-  photos.forEach((d,i)=>{const k='p'+(i+1),c=v=>C(...v);
+  photos.forEach((d,i)=>{const k='p'+(i+1),c=v=>C(...v),mt=mouthTris(d.tris,d.cols);
     KINDS[k]={...KINDS.a,name:`写真 ${i+1}`,W:d.hw*1.02,earY:d.earY??0,earZ:d.earZ??-.06,skin:c(d.skin),hair:c(d.hair),lip:c(d.lip),shirt:d.shirt?c(d.shirt):KINDS.a.shirt,neck:d.neck?c(d.neck):null,ears:d.ears||null,line:PHOTO_LINES[i%4],acc:PHOTO_LINES[i%4],
-      photo:{ring:ringDepth(d.tris,d.pts.length/3),pts:Float32Array.from(d.pts),tris:d.tris,cols:d.cols.map(c),hw:d.hw,hairR:d.hairR||null,hg:d.hg?hairGrid(d.hg):null,rs:d.rs||null,sc:d.sc?sideGrid(d.sc):null,iris:d.iris?C(...d.iris):null,ovc:d.ovc?d.ovc.map(unhex3):null},thumb:d.thumb};
+      photo:{ring:ringDepth(d.tris,d.pts.length/3),pts:Float32Array.from(d.pts),tris:mt.tris,cols:mt.cols.map(c),hw:d.hw,hairR:d.hairR||null,hg:d.hg?hairGrid(d.hg):null,rs:d.rs||null,sc:d.sc?sideGrid(d.sc):null,iris:d.iris?C(...d.iris):null,ovc:d.ovc?d.ovc.map(unhex3):null},thumb:d.thumb};
     KIND_ORDER.push(k);});
 }
 try{photos=JSON.parse(localStorage.getItem('endless-human-photos')||'[]');}catch(e){photos=[];}
