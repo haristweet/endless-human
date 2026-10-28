@@ -79,6 +79,9 @@ input[type=number]{width:110px;background:#1b1b20;border:1px solid var(--line);b
       <section class="page on" id="p-look">
         <h3>画面の比率</h3><div class="seg" data-key="aspect"></div>
         <h3>顔（選んだものを順に入れ替えます）</h3><div class="seg" id="scenes"></div>
+        <h3>写真から顔を作る</h3>
+        <div class="row"><label class="chip" style="display:inline-flex;align-items:center">顔写真を選ぶ<input type="file" id="pfile" accept="image/*" multiple hidden></label><button class="chip" id="pclear" style="display:none">写真の顔を消す</button></div>
+        <p class="note" id="pinfo"></p>
         <h3>描き方</h3><div class="seg" data-key="style"></div>
         <h3>線の色（線画のとき）</h3><div class="seg" data-key="line"></div>
         <h3>走査線（ブラウン管ふう）</h3><div class="seg" data-key="crt"></div>
@@ -127,7 +130,7 @@ input[type=number]{width:110px;background:#1b1b20;border:1px solid var(--line);b
 <script src="mp4-muxer.js"></script>
 <script>
 'use strict';
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 
 // ---------- 乱数・小道具 ----------
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
@@ -225,32 +228,36 @@ function eyeBall(m,cx,cy,cz,R,blink,gaze){
 }
 // 耳：輪の形を少し外へ張り出させる
 function ear(m,K,sx,col){
-  const x0=sx*K.W*.95,cy=0,cz=-.06,n=12,O=t=>[x0+sx*.035,cy+.17*Math.sin(t),cz+.095*Math.cos(t)],I=t=>[x0+sx*.06,cy+.1*Math.sin(t),cz+.05*Math.cos(t)],B=t=>[x0-sx*.02,cy+.15*Math.sin(t),cz+.08*Math.cos(t)];
+  const x0=sx*K.W*.95,cy=K.earY??0,cz=K.earZ??-.06,n=12,O=t=>[x0+sx*.035,cy+.17*Math.sin(t),cz+.095*Math.cos(t)],I=t=>[x0+sx*.06,cy+.1*Math.sin(t),cz+.05*Math.cos(t)],B=t=>[x0-sx*.02,cy+.15*Math.sin(t),cz+.08*Math.cos(t)];
   for(let k=0;k<n;k++){const a=k/n*Math.PI*2,b=(k+1)/n*Math.PI*2;m.quad(O(a),O(b),I(b),I(a),col);m.quad(B(a),B(b),O(b),O(a),col.map(v=>v*.9));}
 }
 // 頭まるごと。o：open（口の開き 0〜1）、blink、gaze、jit（崩れる前のぶれ）、seed
 function headMesh(K,o){
-  const m=new Mesh(),P=[],jr=o.jit?mulberry32(o.seed):null;
+  const m=new Mesh(),P=[],jr=o.jit?mulberry32(o.seed):null,ph=!!K.photo;
   for(let j=0;j<=HV;j++){const row=[];
     for(let i=0;i<HN;i++){
       let p=headPt(K,i/HN,j/HV);const yb=p[1];
+      // 写真の顔のときは、作りものの頭の前を奥へ下げて、写真の顔の後ろに隠す
+      if(ph&&p[2]>0)p=[p[0],p[1],p[2]*.7];
       // 口を開ける：唇より下の前側を下げる（あごが落ちる）
-      if(o.open>0&&yb<MOUTH_Y&&p[2]>0){const w=Math.exp(-((p[0]/.32)**4))*clamp(p[2]/K.D*1.6,0,1),f=clamp((MOUTH_Y-yb)/.12,0,1);
+      if(!ph&&o.open>0&&yb<MOUTH_Y&&p[2]>0){const w=Math.exp(-((p[0]/.32)**4))*clamp(p[2]/K.D*1.6,0,1),f=clamp((MOUTH_Y-yb)/.12,0,1);
         p=[p[0],p[1]-o.open*.17*w*(.35+.65*f),p[2]-o.open*.04*w];}
       if(jr){const a=o.jit;p=p.map(v=>v+(jr()-.5)*a);}
       row.push([p,yb]);}
     P.push(row);}
-  for(let j=0;j<HV;j++)for(let i=0;i<HN;i++){
+  if(!ph)for(let j=0;j<HV;j++)for(let i=0;i<HN;i++){
     const a=P[j][i],b=P[j][(i+1)%HN],c=P[j+1][(i+1)%HN],d=P[j+1][i],cy=(a[1]+c[1])/2,cx=(a[0][0]+c[0][0])/2,cz=(a[0][2]+c[0][2])/2;
     let col=K.skin;
     if(cy>.44||(cz<-.12&&cy>-.2))col=K.hair;
     // 唇の線をまたぐ四角は、口が開くと口の中になる
-    if(cz>0&&Math.abs(cx)<.2&&a[1]>=MOUTH_Y&&d[1]<MOUTH_Y)col=C(64,18,24);
+    if(ph);
+    else if(cz>0&&Math.abs(cx)<.2&&a[1]>=MOUTH_Y&&d[1]<MOUTH_Y)col=C(64,18,24);
     else if(cz>0&&Math.abs(cx)<.17&&cy>-.57&&cy<-.39)col=K.lip;
     m.quad(a[0],b[0],c[0],d[0],col);
   }
-  const top=[0,K.H,0];for(let i=0;i<HN;i++)m.tri(top,P[0][i][0],P[0][(i+1)%HN][0],K.hair);
-  for(const sx of[-1,1]){const ex=sx*.26,ey=.15,ez=K.D*Math.sqrt(Math.max(0,1-(ex/K.W)**2-(ey/K.H)**2))-.075;eyeBall(m,ex,ey,ez,.06,o.blink,o.gaze);ear(m,K,sx,K.skin.map(v=>v*.95));}
+  const top=[0,K.H,0];if(!ph)for(let i=0;i<HN;i++)m.tri(top,P[0][i][0],P[0][(i+1)%HN][0],K.hair);
+  for(const sx of[-1,1]){const ex=sx*.26,ey=.15,ez=K.D*Math.sqrt(Math.max(0,1-(ex/K.W)**2-(ey/K.H)**2))-.075;if(!ph)eyeBall(m,ex,ey,ez,.06,o.blink,o.gaze);ear(m,K,sx,K.skin.map(v=>v*.95));}
+  if(ph)photoFace(m,K,o);
   // 首とえり
   m.cyl(0,-1.75,-.06,.29,-.62*K.H,.26,12,K.skin.map(v=>v*.9));
   m.cyl(0,-2.05,-.06,.7,-1.6,.33,14,K.shirt);
@@ -271,6 +278,88 @@ function shatter(arr,tau,seed){
   }
   return out;
 }
+
+// ---------- 写真から顔を作る ----------
+// 顔の点（MediaPipe の 478 点）の番号：口の内側の輪・両目の輪・まばたきで動かす上まぶたと、その行き先の下まぶた
+const MOUTH_IN=[78,191,80,81,82,13,312,311,310,415,308,324,318,402,317,14,87,178,88,95];
+const EYES=[[33,246,161,160,159,158,157,173,133,155,154,153,145,144,163,7],[263,466,388,387,386,385,384,398,362,382,381,380,374,373,390,249]];
+const IRIS=[468,473];
+const BLINK=[[[246,161,160,159,158,157,173],[7,163,144,145,153,154,155]],[[466,388,387,386,385,384,398],[249,390,373,374,380,381,382]]];
+// 顔の輪郭（ぐるりと一周）
+const OVAL=[10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109];
+const PHOTO_LINES=[[255,120,210],[255,240,120],[150,190,255],[255,160,110]];
+// 輪の中を、中心から扇形に塗る（線画では外の輪だけ線にする）
+function fan(m,pts,col,dz){
+  const c=[0,0,0];for(const p of pts)for(let k=0;k<3;k++)c[k]+=p[k]/pts.length;c[2]+=dz;
+  for(let i=0;i<pts.length;i++){const a=pts[i],b=pts[(i+1)%pts.length];m.tri(c,[a[0],a[1],a[2]+dz],[b[0],b[1],b[2]+dz],col,1,2|4);}
+}
+// 写真の顔：口・まばたき・目線・ぶれを点に当ててから、三角形を写真の色で描く
+function photoFace(m,K,o){
+  const F=K.photo,n=F.pts.length/3,P=new Array(n),y0=(F.pts[13*3+1]+F.pts[14*3+1])/2,chinY=F.pts[152*3+1],jr=o.jit?mulberry32(o.seed+1):null;
+  for(let i=0;i<n;i++){let x=F.pts[i*3],y=F.pts[i*3+1],z=F.pts[i*3+2];
+    // 口を開ける：唇の合わせ目より下（あご）を、顔の中ほどほど大きく下げる
+    if(o.open>0&&y<y0-.004&&y>chinY-.25){const w=Math.exp(-((x/(F.hw*.55))**4)),f=clamp((y0-y)/.12,0,1);y-=o.open*.2*w*(.35+.65*f);z-=o.open*.03*w;}
+    if(jr){x+=(jr()-.5)*o.jit;y+=(jr()-.5)*o.jit;z+=(jr()-.5)*o.jit;}
+    P[i]=[x,y,z];}
+  if(o.blink>0)for(const[up,lo]of BLINK)for(let k=0;k<up.length;k++){const a=P[up[k]],b=P[lo[k]],t=o.blink*.85;P[up[k]]=a.map((v,q)=>lerp(v,b[q],t));}
+  // 後頭部：顔の輪郭の各点から、頭の中心のまわりを丸く回って、後ろの一点へつなぐ（上は髪、下は肌）
+  const ov=OVAL.map(i=>P[i]),zm=ov.reduce((a,p)=>a+p[2],0)/ov.length,c=[0,.08,zm-.5],back=[0,.12,zm-1.35],rows=[ov];
+  for(let k=1;k<=9;k++){const t=k/9;rows.push(ov.map(p=>{const v0=sub(p,c),v1=sub(back,c),r0=Math.hypot(...v0),r1=Math.hypot(...v1),a=norm(v0),b=norm(v1);
+    const om=Math.acos(clamp(dot(a,b),-1,1)),so=Math.sin(om)||1e-6,d=a.map((q,i)=>(Math.sin((1-t)*om)*q+Math.sin(t*om)*b[i])/so),r=lerp(r0,r1,t)*(1+.2*Math.sin(Math.PI*t));
+    return c.map((q,i)=>q+d[i]*r);}));}
+  for(let k=0;k<9;k++)for(let i=0;i<ov.length;i++){const j=(i+1)%ov.length,a=rows[k][i],b=rows[k][j],cc=rows[k+1][j],d=rows[k+1][i],my=(a[1]+cc[1])/2;
+    m.quad(a,b,cc,d,my>.45||(k>2&&my>-.25)?K.hair:K.skin);}
+  fan(m,MOUTH_IN.map(i=>P[i]),C(60,16,22),-.03);
+  EYES.forEach((loop,e)=>{fan(m,loop.map(i=>P[i]),C(232,230,224),-.012);
+    if(n>IRIS[e]+4){const c=P[IRIS[e]],r=Math.hypot(P[IRIS[e]+1][0]-P[IRIS[e]+3][0],P[IRIS[e]+1][1]-P[IRIS[e]+3][1])/2*(1-o.blink*.9),gx=o.gaze[0]*.05,gy=o.gaze[1]*.04;
+      fan(m,[...Array(10)].map((_,k)=>[c[0]+gx+Math.cos(k/10*6.283)*r,c[1]+gy+Math.sin(k/10*6.283)*r*(1-o.blink*.9),c[2]]),C(40,34,30),-.006);}});
+  for(let t=0;t<F.tris.length;t+=3)m.tri(P[F.tris[t]],P[F.tris[t+1]],P[F.tris[t+2]],F.cols[t/3],1);
+}
+// 顔の点を取る仕組み（同梱の MediaPipe）を、最初に使うときだけ読み込む
+const MP='vendor/mediapipe/';let faceLm=null;
+async function landmarker(){
+  if(faceLm)return faceLm;
+  const v=await import(new URL(MP+'vision_bundle.mjs',location.href).href);
+  const fs=await v.FilesetResolver.forVisionTasks(new URL(MP+'wasm',location.href).href);
+  const lm=await v.FaceLandmarker.createFromOptions(fs,{baseOptions:{modelAssetPath:new URL(MP+'face_landmarker.task',location.href).href},runningMode:'IMAGE',numFaces:1});
+  return faceLm={v,lm};
+}
+// 写真 1 枚から、顔の形（点・三角形）と色を作る。傾きを直し、あごの高さと鼻先の前後を頭に合わせる
+async function photoFromFile(file){
+  const img=await createImageBitmap(file),{v,lm}=await landmarker(),res=lm.detect(img);
+  if(!res.faceLandmarks||!res.faceLandmarks.length)throw new Error('顔が見つかりませんでした');
+  const L=res.faceLandmarks[0],W=img.width,H=img.height,cv=document.createElement('canvas');cv.width=W;cv.height=H;
+  const g=cv.getContext('2d');g.drawImage(img,0,0);const px=g.getImageData(0,0,W,H).data;
+  const col=(x,y)=>{x=clamp(Math.round(x),0,W-1);y=clamp(Math.round(y),0,H-1);const i=(y*W+x)*4;return[px[i],px[i+1],px[i+2]];};
+  const P=L.map(p=>[p.x*W,p.y*H,p.z*W]),ang=Math.atan2(P[263][1]-P[33][1],P[263][0]-P[33][0]),ca=Math.cos(-ang),sa=Math.sin(-ang);
+  const cx=(P[234][0]+P[454][0])/2,cy=(P[10][1]+P[152][1])/2;
+  const R=P.map(p=>{const x=p[0]-cx,y=p[1]-cy;return[x*ca-y*sa,x*sa+y*ca,p[2]];}),s=1.78/Math.abs(R[152][1]-R[10][1]);
+  let Q=R.map(p=>[p[0]*s,-p[1]*s,-p[2]*s]);const dy=-.88-Q[152][1],dz=1.12-Q[1][2];Q=Q.map(p=>[p[0],p[1]+dy,p[2]+dz]);
+  // 写真の口が開いていたら、あごを上げて閉じた形にする（歌うときはここから開ける）
+  const gap=Q[13][1]-Q[14][1],y0=Q[13][1],hw0=(Q[454][0]-Q[234][0])/2;
+  if(gap>.004)Q=Q.map(p=>{if(p[1]>=y0-.001||p[1]<Q[152][1]-.25)return p;const w=Math.exp(-((p[0]/(hw0*.55))**4)),f=clamp((y0-p[1])/.12,0,1);return[p[0],p[1]+gap*w*Math.max(f,clamp((y0-p[1])/gap,0,1)),p[2]];});
+  // 三角形：点のつながり（辺）から、3 点が互いにつながっている組を拾う
+  const adj=new Map(),add=(a,b)=>{if(!adj.has(a))adj.set(a,new Set());adj.get(a).add(b);};
+  for(const{start:a,end:b}of v.FaceLandmarker.FACE_LANDMARKS_TESSELATION){add(a,b);add(b,a);}
+  const tris=[];for(const[a,sa2]of adj)for(const b of sa2)if(b>a)for(const c of sa2)if(c>b&&adj.get(b).has(c))tris.push(a,b,c);
+  const cols=[];for(let t=0;t<tris.length;t+=3){const k=[0,0,0];for(const i of tris.slice(t,t+3)){const c=col(P[i][0],P[i][1]);for(let q=0;q<3;q++)k[q]+=c[q];}cols.push(k.map(v=>Math.min(255,Math.round(v/3*1.15))));}
+  const fh=P[152][1]-P[10][1],th=document.createElement('canvas');th.width=th.height=48;
+  th.getContext('2d').drawImage(cv,cx-fh*.6,P[10][1]-fh*.15,fh*1.2,fh*1.2,0,0,48,48);
+  return{pts:Q.flat().map(v=>+v.toFixed(4)),tris,cols,skin:col(P[50][0],P[50][1]),lip:col(P[17][0],P[17][1]),hair:col(P[10][0],P[10][1]-fh*.1),hw:+((Q[454][0]-Q[234][0])/2).toFixed(3),earY:+((Q[234][1]+Q[454][1])/2).toFixed(3),earZ:+((Q[234][2]+Q[454][2])/2-.25).toFixed(3),thumb:th.toDataURL('image/jpeg',.7)};
+}
+// 写真の顔を、顔の選びに足す（p1〜p4）。読み取った結果はブラウザに覚える
+let photos=[];
+function photoKinds(){
+  for(const k of Object.keys(KINDS))if(k[0]==='p')delete KINDS[k];
+  for(let i=KIND_ORDER.length-1;i>=0;i--)if(KIND_ORDER[i][0]==='p')KIND_ORDER.splice(i,1);
+  photos.forEach((d,i)=>{const k='p'+(i+1),c=v=>C(...v);
+    KINDS[k]={...KINDS.a,name:`写真 ${i+1}`,W:d.hw*1.02,earY:d.earY??0,earZ:d.earZ??-.06,skin:c(d.skin),hair:c(d.hair),lip:c(d.lip),line:PHOTO_LINES[i%4],acc:PHOTO_LINES[i%4],
+      photo:{pts:Float32Array.from(d.pts),tris:d.tris,cols:d.cols.map(c),hw:d.hw},thumb:d.thumb};
+    KIND_ORDER.push(k);});
+}
+try{photos=JSON.parse(localStorage.getItem('endless-human-photos')||'[]');}catch(e){photos=[];}
+const savePhotos=()=>{try{localStorage.setItem('endless-human-photos',JSON.stringify(photos));return true;}catch(e){return false;}};
+photoKinds();
 
 // ---------- 動き ----------
 const SPEEDS={slow:.5,mid:1,fast:1.8};
@@ -914,6 +1003,21 @@ $('#ver').textContent='v'+VERSION;
 $('#play').onclick=()=>{playing=!playing;$('#play').textContent=playing?'❚❚':'▶';player.sfxStop();if(snd){if(playing&&!(sim.endAt&&sim.time>=sim.endAt))player.play(snd.buf,sim.time+aoff());else player.stop();}};
 $('#afile').onchange=e=>{const f=e.target.files[0];if(f)loadAudio(f);e.target.value='';};
 $('#aclear').onclick=()=>clearAudio();
+// 写真から顔を作る：読み取れた顔は「写真 1」〜として顔の選びに入れ、写真の顔だけを選んだ状態にする
+const PINFO='正面を向いて口を閉じた顔写真（生成した写真でも）を入れると、その顔が歌います。4枚まで。写真はこのブラウザの中だけで使い、どこにも送りません。最初の1回は顔を読み取る仕組み（約20MB）を読み込むので、少し時間がかかります。';
+function showPhotos(msg){$('#pinfo').textContent=msg||(photos.length?`写真の顔：${photos.length}人。「顔」の選びに「写真 1」〜として入っています。`:PINFO);$('#pclear').style.display=photos.length?'':'none';}
+$('#pfile').onchange=async e=>{
+  const fs=[...e.target.files].slice(0,4);e.target.value='';if(!fs.length)return;
+  showPhotos('顔を読み取っています…（最初は少し時間がかかります）');let ok=0;const ng=[];
+  for(const f of fs){try{photos.push(await photoFromFile(f));if(photos.length>4)photos.shift();ok++;}catch(err){console.error(err);ng.push(f.name);}}
+  photoKinds();const kept=savePhotos();
+  if(ok)cfg.scenes=KIND_ORDER.filter(k=>k[0]==='p');
+  cfg.scenes=cfg.scenes.filter(k=>KINDS[k]);if(!cfg.scenes.length)cfg.scenes=['a'];
+  save();renderUI();restart();
+  showPhotos(`${ok}枚から顔を作りました。`+(ng.length?`顔が見つからなかった写真：${ng.join('、')}。`:'')+(kept?'':'（ブラウザに覚えられなかったので、開き直すと消えます）'));
+};
+$('#pclear').onclick=()=>{photos=[];savePhotos();photoKinds();cfg.scenes=cfg.scenes.filter(k=>KINDS[k]);if(!cfg.scenes.length)cfg.scenes=[...KIND_ORDER];save();renderUI();restart();showPhotos();};
+showPhotos();
 $('#badend').onchange=e=>{cfg.badEnd=e.target.checked;save();};
 $('#lfile').onchange=e=>{const f=e.target.files[0];if(f)loadLyrics(f);e.target.value='';};
 addEventListener('dragover',e=>e.preventDefault());
