@@ -130,7 +130,7 @@ input[type=number]{width:110px;background:#1b1b20;border:1px solid var(--line);b
 <script src="mp4-muxer.js"></script>
 <script>
 'use strict';
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 
 // ---------- 乱数・小道具 ----------
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
@@ -315,9 +315,18 @@ function photoFace(m,K,o){
   if(HR){let f=HR.map((h,i)=>{if(!h)return 1;let mx=0;for(let k=1;k<=9;k++)mx=Math.max(mx,Math.hypot(rows[k][i][0]-HAIR_C[0],rows[k][i][1]-HAIR_C[1]));return clamp(h/mx,.9,1.6);});
     for(let n=0;n<2;n++)f=f.map((v,i)=>(f[(i+nO-1)%nO]+2*v+f[(i+1)%nO])/4);
     for(let k=1;k<=9;k++){const w=k<=6?1:(9-k)/3;for(let i=0;i<nO;i++){const p=rows[k][i],g=1+(f[i]-1)*w;p[0]=HAIR_C[0]+(p[0]-HAIR_C[0])*g;p[1]=HAIR_C[1]+(p[1]-HAIR_C[1])*g;}}}
+  // 横顔があれば、後頭部の点を、横から見た外形が横顔の外形に合うように、頭の中ほどから角度ごとに広げ縮めする（角度の両はしは少しずつ元に戻す）
+  if(F.rs){const ang=p=>Math.atan2(-(p[2]-c[2]),p[1]-HAIR_C[1])*180/Math.PI,mx=new Array(RS_N).fill(0);
+    for(let k=1;k<=9;k++)for(const p of rows[k]){const b=Math.round((ang(p)-RS_A0)/RS_DA);if(b>=0&&b<RS_N)mx[b]=Math.max(mx[b],Math.hypot(p[2]-c[2],p[1]-HAIR_C[1]));}
+    let f=mx.map((v,b)=>v&&F.rs[b]?clamp(F.rs[b]/v,.75,1.5):1);for(let n=0;n<2;n++)f=f.map((v,b)=>(f[Math.max(0,b-1)]+2*v+f[Math.min(RS_N-1,b+1)])/4);
+    for(let k=1;k<=9;k++)for(const p of rows[k]){const a=ang(p),u=(a-RS_A0)/RS_DA;if(u<0||u>RS_N-1)continue;const b=Math.floor(u),fb=lerp(f[b],f[Math.min(RS_N-1,b+1)],u-b),w=Math.min(1,u/3,(RS_N-1-u)/3),g=1+(fb-1)*w;
+      p[2]=c[2]+(p[2]-c[2])*g;p[1]=HAIR_C[1]+(p[1]-HAIR_C[1])*g;}}
   for(let k=0;k<9;k++)for(let i=0;i<nO;i++){const j=(i+1)%nO,a=rows[k][i],b=rows[k][j],cc=rows[k+1][j],d=rows[k+1][i],my=(a[1]+cc[1])/2;
     // 髪の形があるときは、輪郭から後ろへ回った所の耳より上も髪（もみあげ・後ろ髪）
     let col=my>.45||(k>2&&my>-.25)||(HR&&(HR[i]&&HR[j]||k>0&&my>K.earY+.05))?K.hair:K.skin;
+    // 横顔があれば、横から見て髪の所は髪、肌の所は肌に塗る（外形の外へはみ出た所と、正面で髪の外形を測った列の前の方は上のまま。横からは左右が分からないので）
+    if(F.sh&&!(HR&&HR[i]&&HR[j]&&k<3)){const gz=Math.round(((a[2]+b[2]+cc[2]+d[2])/4-SG.z0)/SG.st),gy=Math.round(((a[1]+b[1]+cc[1]+d[1])/4-SG.y0)/SG.st),v=gz>=0&&gy>=0&&gz<SG.nz&&gy<SG.ny?F.sh[gy*SG.nz+gz]:'0';
+      if(v==='1')col=K.hair;else if(v==='2')col=K.skin;}
     // 前を向いた面は、写真の髪の色（ます目）を混ぜて、つやのむらを出す
     if(F.hg){const ce=[0,1,2].map(q=>(a[q]+b[q]+cc[q]+d[q])/4),nn=norm(cross(sub(cc,a),sub(d,b)));let nz=nn[2];if(dot(nn,sub(ce,c))<0)nz=-nz;
       const gi=Math.round((ce[0]-HG.x0)/HG.st),gj=Math.round((ce[1]-HG.y0)/HG.st),hc=nz>.45&&gi>=0&&gj>=0&&gi<HG.nx&&gj<HG.ny?F.hg[gj*HG.nx+gi]:null;if(hc)col=col.map((v,q)=>lerp(v,hc[q],.6));}
@@ -342,7 +351,8 @@ async function landmarker(){
 // 写真 1 枚から、顔の形（点・三角形）と色を作る。傾きを直し、あごの高さと鼻先の前後を頭に合わせる
 async function photoFromFile(file){
   const img=await createImageBitmap(file),{v,lm,seg}=await landmarker(),res=lm.detect(img);
-  if(!res.faceLandmarks||!res.faceLandmarks.length)throw new Error('顔が見つかりませんでした');
+  // 顔の点が取れない写真は、横顔か後ろ姿かを外形から見分けて返す（横顔は正面の顔に足す）
+  if(!res.faceLandmarks||!res.faceLandmarks.length){const sl=seg&&silhouette(img,seg);if(sl&&sl.view)return sl;throw new Error('顔が見つかりませんでした');}
   const L=res.faceLandmarks[0],W=img.width,H=img.height,cv=document.createElement('canvas');cv.width=W;cv.height=H;
   const g=cv.getContext('2d');g.drawImage(img,0,0);const px=g.getImageData(0,0,W,H).data;
   const col=(x,y)=>{x=clamp(Math.round(x),0,W-1);y=clamp(Math.round(y),0,H-1);const i=(y*W+x)*4;return[px[i],px[i+1],px[i+2]];};
@@ -378,7 +388,39 @@ async function photoFromFile(file){
       hg+=k.map(v=>Math.min(15,Math.round(v/5*1.15/17)).toString(16)).join('');}}}
   const fh=P[152][1]-P[10][1],th=document.createElement('canvas');th.width=th.height=48;
   th.getContext('2d').drawImage(cv,cx-fh*.6,P[10][1]-fh*.15,fh*1.2,fh*1.2,0,0,48,48);
-  return{pts:Q.flat().map(v=>+v.toFixed(4)),tris,cols,skin:col(P[50][0],P[50][1]),lip:col(P[17][0],P[17][1]),hair:hairCol(),hw:+((Q[454][0]-Q[234][0])/2).toFixed(3),earY:+((Q[234][1]+Q[454][1])/2).toFixed(3),earZ:+((Q[234][2]+Q[454][2])/2-.25).toFixed(3),thumb:th.toDataURL('image/jpeg',.7),hairR,hg};
+  return{pts:Q.flat().map(v=>+v.toFixed(4)),tris,cols,skin:col(P[50][0],P[50][1]),lip:col(P[17][0],P[17][1]),hair:hairCol(),hw:+((Q[454][0]-Q[234][0])/2).toFixed(3),earY:+((Q[234][1]+Q[454][1])/2).toFixed(3),earZ:+((Q[234][2]+Q[454][2])/2-.25).toFixed(3),thumb:th.toDataURL('image/jpeg',.7),hairR,hg,
+    // 横顔を合わせるときの目じるし：鼻先の高さと前後、頭のてっぺん（髪の上）、頭の中ほどの前後
+    ref:{noseY:+Q[1][1].toFixed(3),noseZ:+Q[1][2].toFixed(3),top:+(hairR&&hairR[0]?HAIR_C[1]+hairR[0]:Q[10][1]+.1).toFixed(3),zc:+(OVAL.reduce((a,i)=>a+Q[i][2],0)/OVAL.length-.5).toFixed(3)}};
+}
+// 顔の点が取れない写真の外形：背景（ふちの色）と違う所を人、髪の切り抜きを髪とする。
+// 髪の下の帯で、肌（人で髪でない所）が髪の中ほどから片側へ寄っていれば横顔（寄った側が顔の向き）、寄っていなければ後ろ姿
+function silhouette(img,seg){
+  const W=img.width,H=img.height,cv=document.createElement('canvas');cv.width=W;cv.height=H;const g=cv.getContext('2d');g.drawImage(img,0,0);const px=g.getImageData(0,0,W,H).data;
+  const r=seg.segment(img),m=r.confidenceMasks[r.confidenceMasks.length-1],mw=m.width,mh=m.height,conf=m.getAsFloat32Array().slice();r.close?.();
+  const hairAt=(x,y)=>conf[Math.min(mh-1,Math.round(y/H*mh))*mw+Math.min(mw-1,Math.round(x/W*mw))]>.5;
+  const bs=[];for(let x=0;x<W;x+=8)bs.push(0*W+x);for(let y=0;y<H*.6;y+=8)bs.push(y*W,y*W+W-1);
+  const bg=[0,1,2].map(q=>bs.map(i=>px[i*4+q]).sort((a,b)=>a-b)[bs.length>>1]);
+  const fg=new Uint8Array(W*H);for(let i=0;i<W*H;i++)fg[i]=Math.hypot(px[i*4]-bg[0],px[i*4+1]-bg[1],px[i*4+2]-bg[2])>35?1:0;
+  let x0=W,x1=-1,yT=-1,hs=0,hx=0;for(let y=0;y<H;y+=2)for(let x=0;x<W;x+=2)if(hairAt(x,y)){if(yT<0)yT=y;x0=Math.min(x0,x);x1=Math.max(x1,x);hs++;hx+=x;}
+  if(yT<0)return null;const wH=x1-x0,hcx=hx/hs;let ks=0,kx=0;
+  for(let y=Math.round(yT+.3*wH);y<Math.min(H,yT+.9*wH);y+=2)for(let x=0;x<W;x+=2)if(fg[y*W+x]&&!hairAt(x,y)){ks++;kx+=x;}
+  const asym=ks?(kx/ks-hcx)/wH:0;
+  return{view:Math.abs(asym)>.12?'side':'back',W,H,fg,hairAt,yT,wH,dir:Math.sign(asym)};
+}
+// 横顔の外形から、頭の中ほどのまわりの角度ごとに、外形までの長さ（rs）を測る。角度は真上を 0 として後ろへ（-40〜110度、5度ごと）。
+// 大きさと位置は、正面の顔の鼻先と頭のてっぺん（ref）に合わせる。横顔の鼻先は、髪の下の帯でいちばん前へ出た所。
+// 横から見て髪のある所も、細かいます目（SG。1 が髪、2 が肌、0 が外）で覚え、後頭部の髪と肌の塗り分けに使う
+const RS_A0=-40,RS_DA=5,RS_N=31,SG={z0:-2.4,y0:-1.4,st:.05,nz:77,ny:69};
+function sideFit(S,ref){
+  const{W,H,fg,yT,wH,dir}=S,F=(x,y)=>x>=0&&y>=0&&x<W&&y<H&&fg[Math.round(y)*W+Math.round(x)];let xn=-1,yn=-1;
+  for(let y=Math.round(yT+.35*wH);y<Math.min(H,yT+.85*wH);y+=2)for(let k=0;k<W;k++){const x=dir>0?W-1-k:k;if(fg[y*W+x]){if(xn<0||(x-xn)*dir>0){xn=x;yn=y;}break;}}
+  if(xn<0||yn<=yT)return null;
+  const sp=(ref.top-ref.noseY)/(yn-yT),toImg=(z,y)=>[xn+(z-ref.noseZ)/sp*dir,yn-(y-ref.noseY)/sp];
+  const rs=[...Array(RS_N)].map((_,b)=>{const a=(RS_A0+b*RS_DA)*Math.PI/180,d=[-Math.sin(a),Math.cos(a)];let last=0;
+    for(let t=.3;t<2.2;t+=.01){if(F(...toImg(ref.zc+d[0]*t,HAIR_C[1]+d[1]*t)))last=t;else if(last&&t-last>.05)break;}
+    return+last.toFixed(3);});
+  let sh='';for(let j=0;j<SG.ny;j++)for(let i=0;i<SG.nz;i++){const[x,y]=toImg(SG.z0+i*SG.st,SG.y0+j*SG.st);sh+=x>=0&&y>=0&&x<W&&y<H?S.hairAt(x,y)?'1':F(x,y)?'2':'0':'0';}
+  return{rs,sh};
 }
 // 写真の顔を、顔の選びに足す（p1〜p4）。読み取った結果はブラウザに覚える
 let photos=[];
@@ -387,7 +429,7 @@ function photoKinds(){
   for(let i=KIND_ORDER.length-1;i>=0;i--)if(KIND_ORDER[i][0]==='p')KIND_ORDER.splice(i,1);
   photos.forEach((d,i)=>{const k='p'+(i+1),c=v=>C(...v);
     KINDS[k]={...KINDS.a,name:`写真 ${i+1}`,W:d.hw*1.02,earY:d.earY??0,earZ:d.earZ??-.06,skin:c(d.skin),hair:c(d.hair),lip:c(d.lip),line:PHOTO_LINES[i%4],acc:PHOTO_LINES[i%4],
-      photo:{pts:Float32Array.from(d.pts),tris:d.tris,cols:d.cols.map(c),hw:d.hw,hairR:d.hairR||null,hg:d.hg?hairGrid(d.hg):null},thumb:d.thumb};
+      photo:{pts:Float32Array.from(d.pts),tris:d.tris,cols:d.cols.map(c),hw:d.hw,hairR:d.hairR||null,hg:d.hg?hairGrid(d.hg):null,rs:d.rs||null,sh:d.sh||null},thumb:d.thumb};
     KIND_ORDER.push(k);});
 }
 try{photos=JSON.parse(localStorage.getItem('endless-human-photos')||'[]');}catch(e){photos=[];}
@@ -1037,17 +1079,20 @@ $('#play').onclick=()=>{playing=!playing;$('#play').textContent=playing?'❚❚'
 $('#afile').onchange=e=>{const f=e.target.files[0];if(f)loadAudio(f);e.target.value='';};
 $('#aclear').onclick=()=>clearAudio();
 // 写真から顔を作る：読み取れた顔は「写真 1」〜として顔の選びに入れ、写真の顔だけを選んだ状態にする
-const PINFO='正面を向いて口を閉じた顔写真（生成した写真でも）を入れると、その顔が歌います。4枚まで。写真はこのブラウザの中だけで使い、どこにも送りません。最初の1回は顔を読み取る仕組み（約20MB）を読み込むので、少し時間がかかります。';
+const PINFO='正面を向いて口を閉じた顔写真（生成した写真でも）を入れると、その顔が歌います。4枚まで。真横の写真も一緒に選ぶと、頭の奥行きと後ろの髪の形を合わせます。写真はこのブラウザの中だけで使い、どこにも送りません。最初の1回は顔を読み取る仕組み（約20MB）を読み込むので、少し時間がかかります。';
 function showPhotos(msg){$('#pinfo').textContent=msg||(photos.length?`写真の顔：${photos.length}人。「顔」の選びに「写真 1」〜として入っています。`:PINFO);$('#pclear').style.display=photos.length?'':'none';}
 $('#pfile').onchange=async e=>{
-  const fs=[...e.target.files].slice(0,4);e.target.value='';if(!fs.length)return;
-  showPhotos('顔を読み取っています…（最初は少し時間がかかります）');let ok=0;const ng=[];
-  for(const f of fs){try{photos.push(await photoFromFile(f));if(photos.length>4)photos.shift();ok++;}catch(err){console.error(err);ng.push(f.name);}}
+  const fs=[...e.target.files].slice(0,12);e.target.value='';if(!fs.length)return;
+  showPhotos('顔を読み取っています…（最初は少し時間がかかります）');let ok=0,nside=0,nback=0,first=null;const ng=[],sides=[];
+  for(const f of fs){try{const d=await photoFromFile(f);if(d.view==='side')sides.push(d);else if(d.view==='back')nback++;else{photos.push(d);if(photos.length>4)photos.shift();if(!first)first=d;ok++;}}catch(err){console.error(err);ng.push(f.name);}}
+  // 横顔は、一緒に選んだ正面の顔（なければ最後に作った顔）に足す
+  const to=first||photos[photos.length-1];
+  for(const sd of sides){const r=to&&to.ref&&sideFit(sd,to.ref);if(r){Object.assign(to,r);nside++;}else ng.push('横顔');}
   photoKinds();const kept=savePhotos();
   if(ok)cfg.scenes=KIND_ORDER.filter(k=>k[0]==='p');
   cfg.scenes=cfg.scenes.filter(k=>KINDS[k]);if(!cfg.scenes.length)cfg.scenes=['a'];
   save();renderUI();restart();
-  showPhotos(`${ok}枚から顔を作りました。`+(ng.length?`顔が見つからなかった写真：${ng.join('、')}。`:'')+(kept?'':'（ブラウザに覚えられなかったので、開き直すと消えます）'));
+  showPhotos((ok?`${ok}枚から顔を作りました。`:'')+(nside?'横顔で頭の形を合わせました。':'')+(nback?'後ろ姿の写真は使いません。':'')+(ng.length?`顔が見つからなかった写真：${ng.join('、')}。`:'')+(kept?'':'（ブラウザに覚えられなかったので、開き直すと消えます）'));
 };
 $('#pclear').onclick=()=>{photos=[];savePhotos();photoKinds();cfg.scenes=cfg.scenes.filter(k=>KINDS[k]);if(!cfg.scenes.length)cfg.scenes=[...KIND_ORDER];save();renderUI();restart();showPhotos();};
 showPhotos();
