@@ -130,7 +130,7 @@ input[type=number]{width:110px;background:#1b1b20;border:1px solid var(--line);b
 <script src="mp4-muxer.js"></script>
 <script>
 'use strict';
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
 
 // ---------- 乱数・小道具 ----------
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
@@ -231,6 +231,13 @@ function ear(m,K,sx,col){
   const x0=sx*K.W*.95,cy=K.earY??0,cz=K.earZ??-.06,n=12,O=t=>[x0+sx*.035,cy+.17*Math.sin(t),cz+.095*Math.cos(t)],I=t=>[x0+sx*.06,cy+.1*Math.sin(t),cz+.05*Math.cos(t)],B=t=>[x0-sx*.02,cy+.15*Math.sin(t),cz+.08*Math.cos(t)];
   for(let k=0;k<n;k++){const a=k/n*Math.PI*2,b=(k+1)/n*Math.PI*2;m.quad(O(a),O(b),I(b),I(a),col);m.quad(B(a),B(b),O(b),O(a),col.map(v=>v*.9));}
 }
+// 写真の耳：正面の写真で測った外のはし・上下の大きさで、縁・内側・付け根の輪を作り、写真の耳の色で塗る（顔と同じく光を当てない）
+function photoEar(m,K,sx,e){
+  const ry=(e.y1-e.y0)/2+.02,rz=ry*.62,cy=(e.y0+e.y1)/2,cz=(K.earZ??-.06)-.12,x0=e.x-sx*.05,n=14,c0=C(...e.col).map(v=>Math.min(1,v*1.1));
+  const O=t=>[x0+sx*.02,cy+ry*Math.sin(t),cz+rz*Math.cos(t)],I=t=>[x0+sx*.0,cy+ry*.62*Math.sin(t)-.02,cz+rz*.55*Math.cos(t)+.02],B=t=>[x0-sx*.16,cy+ry*.85*Math.sin(t),cz+rz*.7*Math.cos(t)-.04];
+  for(let k=0;k<n;k++){const a=k/n*Math.PI*2,b=(k+1)/n*Math.PI*2;m.quad(O(a),O(b),I(b),I(a),c0.map(v=>v*.92),1);m.quad(B(a),B(b),O(b),O(a),c0.map(v=>v*.8),1);}
+  fan(m,[...Array(n)].map((_,k)=>I(k/n*Math.PI*2)),c0.map(v=>v*.7),0);
+}
 // 頭まるごと。o：open（口の開き 0〜1）、blink、gaze、jit（崩れる前のぶれ）、seed
 function headMesh(K,o){
   const m=new Mesh(),P=[],jr=o.jit?mulberry32(o.seed):null,ph=!!K.photo;
@@ -256,10 +263,11 @@ function headMesh(K,o){
     m.quad(a[0],b[0],c[0],d[0],col);
   }
   const top=[0,K.H,0];if(!ph)for(let i=0;i<HN;i++)m.tri(top,P[0][i][0],P[0][(i+1)%HN][0],K.hair);
-  for(const sx of[-1,1]){const ex=sx*.26,ey=.15,ez=K.D*Math.sqrt(Math.max(0,1-(ex/K.W)**2-(ey/K.H)**2))-.075;if(!ph)eyeBall(m,ex,ey,ez,.06,o.blink,o.gaze);ear(m,K,sx,K.skin.map(v=>v*.95));}
+  for(const sx of[-1,1]){const ex=sx*.26,ey=.15,ez=K.D*Math.sqrt(Math.max(0,1-(ex/K.W)**2-(ey/K.H)**2))-.075;if(!ph)eyeBall(m,ex,ey,ez,.06,o.blink,o.gaze);const pe=ph&&K.ears&&K.ears[sx<0?0:1];if(pe)photoEar(m,K,sx,pe);else ear(m,K,sx,K.skin.map(v=>v*.95));}
   if(ph)photoFace(m,K,o);
   // 首とえり
-  m.cyl(0,-1.75,-.06,.29,-.62*K.H,.26,12,K.skin.map(v=>v*.9));
+  if(ph&&K.photo.ovc)m.cyl(0,-1.75,-.12,K.photo.hw*.6,-.62*K.H,K.photo.hw*.56,14,(K.neck?K.neck.map((v,q)=>(v+K.skin[q])/2):K.skin.map(v=>v*.85)).map(v=>Math.min(1,v*1.1)));
+  else m.cyl(0,-1.75,-.06,.29,-.62*K.H,.26,12,K.skin.map(v=>v*.9));
   m.cyl(0,-2.05,-.06,.7,-1.6,.33,14,K.shirt);
   return new Float32Array(m.v);
 }
@@ -289,6 +297,10 @@ const BLINK=[[[246,161,160,159,158,157,173],[7,163,144,145,153,154,155]],[[466,3
 const OVAL=[10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109];
 // 髪の形：測るときの頭の中ほど（前から見た位置）と、髪の色のます目（前から見た範囲と細かさ）
 const HAIR_C=[0,.08],HG={x0:-1.5,y0:-1,st:.05,nx:61,ny:57};
+// ます目から、いちばん近い色の入ったます（となり 1 つまで）を取る
+function gridAt(g,nx,ny,u,v){const i0=Math.round(u),j0=Math.round(v);for(let r=0;r<2;r++)for(let dj=-r;dj<=r;dj++)for(let di=-r;di<=r;di++){const i=i0+di,j=j0+dj;if(i>=0&&j>=0&&i<nx&&j<ny&&g[j*nx+i])return g[j*nx+i];}return null;}
+const PH_L=[-.458,.504,.733];
+function sideGrid(t){const g=[];for(let i=0;i<t.length;){if(t[i]==='-'){g.push(null);i++;}else{const c=unhex3(t.slice(i+1,i+4));c.hair=t[i]==='h';g.push(c);i+=4;}}return g;}
 function hairGrid(t){const g=[];for(let i=0;i<t.length;){if(t[i]==='-'){g.push(null);i++;}else{g.push(C(...[0,1,2].map(q=>parseInt(t[i+q],16)*17)));i+=3;}}return g;}
 const PHOTO_LINES=[[255,120,210],[255,240,120],[150,190,255],[255,160,110]];
 // 輪の中を、中心から扇形に塗る（線画では外の輪だけ線にする）
@@ -324,13 +336,18 @@ function photoFace(m,K,o){
   for(let k=0;k<9;k++)for(let i=0;i<nO;i++){const j=(i+1)%nO,a=rows[k][i],b=rows[k][j],cc=rows[k+1][j],d=rows[k+1][i],my=(a[1]+cc[1])/2;
     // 髪の形があるときは、輪郭から後ろへ回った所の耳より上も髪（もみあげ・後ろ髪）
     let col=my>.45||(k>2&&my>-.25)||(HR&&(HR[i]&&HR[j]||k>0&&my>K.earY+.05))?K.hair:K.skin;
-    // 横顔があれば、横から見て髪の所は髪、肌の所は肌に塗る（外形の外へはみ出た所と、正面で髪の外形を測った列の前の方は上のまま。横からは左右が分からないので）
-    if(F.sh&&!(HR&&HR[i]&&HR[j]&&k<3)){const gz=Math.round(((a[2]+b[2]+cc[2]+d[2])/4-SG.z0)/SG.st),gy=Math.round(((a[1]+b[1]+cc[1]+d[1])/4-SG.y0)/SG.st),v=gz>=0&&gy>=0&&gz<SG.nz&&gy<SG.ny?F.sh[gy*SG.nz+gz]:'0';
-      if(v==='1')col=K.hair;else if(v==='2')col=K.skin;}
-    // 前を向いた面は、写真の髪の色（ます目）を混ぜて、つやのむらを出す
-    if(F.hg){const ce=[0,1,2].map(q=>(a[q]+b[q]+cc[q]+d[q])/4),nn=norm(cross(sub(cc,a),sub(d,b)));let nz=nn[2];if(dot(nn,sub(ce,c))<0)nz=-nz;
-      const gi=Math.round((ce[0]-HG.x0)/HG.st),gj=Math.round((ce[1]-HG.y0)/HG.st),hc=nz>.45&&gi>=0&&gj>=0&&gi<HG.nx&&gj<HG.ny?F.hg[gj*HG.nx+gi]:null;if(hc)col=col.map((v,q)=>lerp(v,hc[q],.6));}
-    m.quad(a,b,cc,d,col);}
+    const ce=[0,1,2].map(q=>(a[q]+b[q]+cc[q]+d[q])/4);let nn=norm(cross(sub(cc,a),sub(d,b)));if(dot(nn,sub(ce,c))<0)nn=nn.map(v=>-v);
+    const hc=F.hg&&nn[2]>.3?gridAt(F.hg,HG.nx,HG.ny,(ce[0]-HG.x0)/HG.st,(ce[1]-HG.y0)/HG.st):null;
+    if(!F.ovc){if(hc&&nn[2]>.45)col=col.map((v,q)=>lerp(v,hc[q],.6));m.quad(a,b,cc,d,col);continue;}
+    // 写真で塗る：前を向いた所は正面の写真、横・後ろを向いた所は横顔の写真、顔のふちは輪郭のすぐ内側の色を、向きに応じて混ぜる。
+    // 顔と同じく光を当てずに写真の色のまま描き、向きによる明るさだけ少し付ける（顔とのつなぎ目が見えないように）
+    // 横顔の色は耳より後ろだけ（前の方は横から見ると顔に重なり、左右が分からないので）。真後ろを向いた所は外形のふちに当たるので使わない
+    const hairCol=HR&&HR[i]&&HR[j],zb=clamp(((K.earZ??-.06)+.05-ce[2])/.35,0,1);
+    const sc=F.sc&&zb>0?gridAt(F.sc,SG.nz,SG.ny,(ce[2]-SG.z0)/SG.st,(ce[1]-SG.y0)/SG.st):null;
+    const cand=[[col,.3+Math.max(0,-nn[2])]];if(hc)cand.push([hc,nn[2]*2]);if(sc)cand.push([sc,Math.max(Math.abs(nn[0]),.15)*zb*1.5]);
+    if(k<2&&!hairCol)cand.push([F.ovc[i].map((v,q)=>(v+F.ovc[j][q])/2),k?.8:3]);
+    const ws=cand.reduce((t,x)=>t+x[1],0),sh=.8+.28*Math.max(0,dot(nn,PH_L));
+    m.quad(a,b,cc,d,[0,1,2].map(q=>cand.reduce((t,x)=>t+x[0][q]*x[1],0)/ws*sh),1);}
   fan(m,MOUTH_IN.map(i=>P[i]),C(60,16,22),-.03);
   EYES.forEach((loop,e)=>{fan(m,loop.map(i=>P[i]),C(232,230,224),-.012);
     if(n>IRIS[e]+4){const c=P[IRIS[e]],r=Math.hypot(P[IRIS[e]+1][0]-P[IRIS[e]+3][0],P[IRIS[e]+1][1]-P[IRIS[e]+3][1])/2*(1-o.blink*.9),gx=o.gaze[0]*.05,gy=o.gaze[1]*.04;
@@ -374,7 +391,7 @@ async function photoFromFile(file){
     for(let d=fh*.05;d<fh*.5;d+=fh*.01){const c=at(d);if(Math.hypot(c[0]-sk[0],c[1]-sk[1],c[2]-sk[2])>90){const cs=[...Array(5)].map((_,k)=>at(d+fh*(.03+k*.02)));return[0,1,2].map(q=>cs.map(c=>c[q]).sort((a,b)=>a-b)[2]);}}
     return[44,36,30];};
   // 髪の形：写真の髪の所を切り抜き、顔の輪郭の各点から（頭の中ほどから見て）外へたどって、髪の外側までの長さを測る。前から見える髪の色は細かいます目で覚える
-  let hairR=null,hg=null;
+  let hairR=null,hg=null,ears=null;
   if(seg){const r=seg.segment(img),m=r.confidenceMasks[r.confidenceMasks.length-1],mw=m.width,mh=m.height,conf=m.getAsFloat32Array().slice();r.close?.();
     const toImg=(X,Y)=>{const rx=X/s,ry=-(Y-dy)/s;return[rx*Math.cos(ang)-ry*Math.sin(ang)+cx,rx*Math.sin(ang)+ry*Math.cos(ang)+cy];};
     const isHair=(X,Y,th=.5)=>{const[u,w]=toImg(X,Y),i=Math.round(u/W*mw),j=Math.round(w/H*mh);return i>=0&&j>=0&&i<mw&&j<mh&&conf[j*mw+i]>th;};
@@ -385,31 +402,46 @@ async function photoFromFile(file){
     if(hairR.filter(v=>v).length<3)hairR=null;
     else{hg='';const h=HG.st/3;for(let j=0;j<HG.ny;j++)for(let i=0;i<HG.nx;i++){const X=HG.x0+i*HG.st,Y=HG.y0+j*HG.st;if(!isHair(X,Y,.85)){hg+='-';continue;}
       const k=[0,0,0];for(const[ox,oy]of[[0,0],[h,h],[-h,h],[h,-h],[-h,-h]]){const c=col(...toImg(X+ox,Y+oy));for(let q=0;q<3;q++)k[q]+=c[q];}
-      hg+=k.map(v=>Math.min(15,Math.round(v/5*1.15/17)).toString(16)).join('');}}}
+      hg+=k.map(v=>Math.min(15,Math.round(v/5*1.15/17)).toString(16)).join('');}}
+    // 耳：頬のはし（234・454）から外へ、人の所で髪でない所が続く長さを、耳の高さの行ごとに測る。外へ出ている行の上下と、いちばん外を耳とする
+    const fe=P[152][1]-P[10][1],fg=bgMask(px,W,H),hairPx=(x,y)=>conf[Math.min(mh-1,Math.round(y/H*mh))*mw+Math.min(mw-1,Math.round(x/W*mw))]>.5;
+    ears=[[234,-1],[454,1]].map(([li,sx])=>{let top=null,bot=null,out=0;
+      for(let y=Math.round(P[li][1]-fe*.3);y<P[li][1]+fe*.3;y+=2){let x=Math.round(P[li][0]),n=0;while(x>0&&x<W-1&&fg[y*W+x]&&!hairPx(x,y)&&n<fe*.25){x+=sx;n++;}
+        if(n>fe*.035){if(top==null)top=y;bot=y;out=Math.max(out,n);}}
+      if(top==null||bot-top<fe*.12)return null;
+      const toM=(x,y)=>{const ux=x-cx,uy=y-cy;return[(ux*ca-uy*sa)*s,-(ux*sa+uy*ca)*s+dy];},a=toM(P[li][0]+sx*out,top),b=toM(P[li][0]+sx*out,bot),e=col(P[li][0]+sx*out*.6,(top+bot)/2);
+      return{x:+a[0].toFixed(3),y0:+b[1].toFixed(3),y1:+a[1].toFixed(3),col:e};});
+    if(!ears[0]&&!ears[1])ears=null;}
   const fh=P[152][1]-P[10][1],th=document.createElement('canvas');th.width=th.height=48;
   th.getContext('2d').drawImage(cv,cx-fh*.6,P[10][1]-fh*.15,fh*1.2,fh*1.2,0,0,48,48);
-  return{pts:Q.flat().map(v=>+v.toFixed(4)),tris,cols,skin:col(P[50][0],P[50][1]),lip:col(P[17][0],P[17][1]),hair:hairCol(),hw:+((Q[454][0]-Q[234][0])/2).toFixed(3),earY:+((Q[234][1]+Q[454][1])/2).toFixed(3),earZ:+((Q[234][2]+Q[454][2])/2-.25).toFixed(3),thumb:th.toDataURL('image/jpeg',.7),hairR,hg,
+  return{pts:Q.flat().map(v=>+v.toFixed(4)),tris,cols,skin:col(P[50][0],P[50][1]),lip:col(P[17][0],P[17][1]),hair:hairCol(),hw:+((Q[454][0]-Q[234][0])/2).toFixed(3),earY:+((Q[234][1]+Q[454][1])/2).toFixed(3),earZ:+((Q[234][2]+Q[454][2])/2-.25).toFixed(3),thumb:th.toDataURL('image/jpeg',.7),hairR,hg,ears,
+    // 輪郭のすぐ内側の色（後頭部とのつなぎ目をなじませる）、あごの下（首）とえりの色
+    ovc:OVAL.map(i=>hex3(col(lerp(P[i][0],P[1][0],.06),lerp(P[i][1],P[1][1],.06)))),neck:(n=>Math.max(...n)-Math.min(...n)<25?null:n)(col(P[152][0],P[152][1]+fh*.12)),
+    shirt:P[152][1]+fh*.8<H?[0,1,2].map(q=>(col(P[152][0]-fh*.75,P[152][1]+fh*.8)[q]+col(P[152][0]+fh*.75,P[152][1]+fh*.8)[q])/2):null,
     // 横顔を合わせるときの目じるし：鼻先の高さと前後、頭のてっぺん（髪の上）、頭の中ほどの前後
     ref:{noseY:+Q[1][1].toFixed(3),noseZ:+Q[1][2].toFixed(3),top:+(hairR&&hairR[0]?HAIR_C[1]+hairR[0]:Q[10][1]+.1).toFixed(3),zc:+(OVAL.reduce((a,i)=>a+Q[i][2],0)/OVAL.length-.5).toFixed(3)}};
 }
+// 写真の背景の色（上のふちと左右のふちの上の方の、真ん中の値）と、人の所（背景と色が違う所）
+function bgMask(px,W,H){const bs=[];for(let x=0;x<W;x+=8)bs.push(x);for(let y=0;y<H*.6;y+=8)bs.push(y*W,y*W+W-1);
+  const bg=[0,1,2].map(q=>bs.map(i=>px[i*4+q]).sort((a,b)=>a-b)[bs.length>>1]),fg=new Uint8Array(W*H);
+  for(let i=0;i<W*H;i++)fg[i]=Math.hypot(px[i*4]-bg[0],px[i*4+1]-bg[1],px[i*4+2]-bg[2])>35?1:0;return fg;}
+const hex3=c=>c.map(v=>Math.min(15,Math.round(v*1.15/17)).toString(16)).join(''),unhex3=t=>C(...[0,1,2].map(q=>parseInt(t[q],16)*17));
 // 顔の点が取れない写真の外形：背景（ふちの色）と違う所を人、髪の切り抜きを髪とする。
 // 髪の下の帯で、肌（人で髪でない所）が髪の中ほどから片側へ寄っていれば横顔（寄った側が顔の向き）、寄っていなければ後ろ姿
 function silhouette(img,seg){
   const W=img.width,H=img.height,cv=document.createElement('canvas');cv.width=W;cv.height=H;const g=cv.getContext('2d');g.drawImage(img,0,0);const px=g.getImageData(0,0,W,H).data;
   const r=seg.segment(img),m=r.confidenceMasks[r.confidenceMasks.length-1],mw=m.width,mh=m.height,conf=m.getAsFloat32Array().slice();r.close?.();
   const hairAt=(x,y)=>conf[Math.min(mh-1,Math.round(y/H*mh))*mw+Math.min(mw-1,Math.round(x/W*mw))]>.5;
-  const bs=[];for(let x=0;x<W;x+=8)bs.push(0*W+x);for(let y=0;y<H*.6;y+=8)bs.push(y*W,y*W+W-1);
-  const bg=[0,1,2].map(q=>bs.map(i=>px[i*4+q]).sort((a,b)=>a-b)[bs.length>>1]);
-  const fg=new Uint8Array(W*H);for(let i=0;i<W*H;i++)fg[i]=Math.hypot(px[i*4]-bg[0],px[i*4+1]-bg[1],px[i*4+2]-bg[2])>35?1:0;
+  const fg=bgMask(px,W,H);
   let x0=W,x1=-1,yT=-1,hs=0,hx=0;for(let y=0;y<H;y+=2)for(let x=0;x<W;x+=2)if(hairAt(x,y)){if(yT<0)yT=y;x0=Math.min(x0,x);x1=Math.max(x1,x);hs++;hx+=x;}
   if(yT<0)return null;const wH=x1-x0,hcx=hx/hs;let ks=0,kx=0;
   for(let y=Math.round(yT+.3*wH);y<Math.min(H,yT+.9*wH);y+=2)for(let x=0;x<W;x+=2)if(fg[y*W+x]&&!hairAt(x,y)){ks++;kx+=x;}
   const asym=ks?(kx/ks-hcx)/wH:0;
-  return{view:Math.abs(asym)>.12?'side':'back',W,H,fg,hairAt,yT,wH,dir:Math.sign(asym)};
+  return{view:Math.abs(asym)>.12?'side':'back',W,H,fg,hairAt,yT,wH,dir:Math.sign(asym),px};
 }
 // 横顔の外形から、頭の中ほどのまわりの角度ごとに、外形までの長さ（rs）を測る。角度は真上を 0 として後ろへ（-40〜110度、5度ごと）。
 // 大きさと位置は、正面の顔の鼻先と頭のてっぺん（ref）に合わせる。横顔の鼻先は、髪の下の帯でいちばん前へ出た所。
-// 横から見て髪のある所も、細かいます目（SG。1 が髪、2 が肌、0 が外）で覚え、後頭部の髪と肌の塗り分けに使う
+// 横から見た色も、細かいます目（SG。h＋色が髪、s＋色が肌、- が外）で覚え、後頭部を塗るのに使う
 const RS_A0=-40,RS_DA=5,RS_N=31,SG={z0:-2.4,y0:-1.4,st:.05,nz:77,ny:69};
 function sideFit(S,ref){
   const{W,H,fg,yT,wH,dir}=S,F=(x,y)=>x>=0&&y>=0&&x<W&&y<H&&fg[Math.round(y)*W+Math.round(x)];let xn=-1,yn=-1;
@@ -419,8 +451,12 @@ function sideFit(S,ref){
   const rs=[...Array(RS_N)].map((_,b)=>{const a=(RS_A0+b*RS_DA)*Math.PI/180,d=[-Math.sin(a),Math.cos(a)];let last=0;
     for(let t=.3;t<2.2;t+=.01){if(F(...toImg(ref.zc+d[0]*t,HAIR_C[1]+d[1]*t)))last=t;else if(last&&t-last>.05)break;}
     return+last.toFixed(3);});
-  let sh='';for(let j=0;j<SG.ny;j++)for(let i=0;i<SG.nz;i++){const[x,y]=toImg(SG.z0+i*SG.st,SG.y0+j*SG.st);sh+=x>=0&&y>=0&&x<W&&y<H?S.hairAt(x,y)?'1':F(x,y)?'2':'0':'0';}
-  return{rs,sh};
+  const cAt=(x,y)=>{const i=(clamp(Math.round(y),0,H-1)*W+clamp(Math.round(x),0,W-1))*4;return[S.px[i],S.px[i+1],S.px[i+2]];},h=SG.st/3;
+  let sc='';for(let j=0;j<SG.ny;j++)for(let i=0;i<SG.nz;i++){const z=SG.z0+i*SG.st,y=SG.y0+j*SG.st,[x,yy]=toImg(z,y);
+    if(!F(x,yy)&&!(x>=0&&yy>=0&&x<W&&yy<H&&S.hairAt(x,yy))){sc+='-';continue;}
+    const k=[0,0,0];let nk=0;for(const[oz,oy]of[[0,0],[h,h],[-h,h],[h,-h],[-h,-h]]){const p=toImg(z+oz,y+oy);if(!F(...p))continue;const c=cAt(...p);nk++;for(let q=0;q<3;q++)k[q]+=c[q];}
+    if(!nk){sc+='-';continue;}sc+=(S.hairAt(x,yy)?'h':'s')+hex3(k.map(v=>v/nk));}
+  return{rs,sc};
 }
 // 写真の顔を、顔の選びに足す（p1〜p4）。読み取った結果はブラウザに覚える
 let photos=[];
@@ -428,8 +464,8 @@ function photoKinds(){
   for(const k of Object.keys(KINDS))if(k[0]==='p')delete KINDS[k];
   for(let i=KIND_ORDER.length-1;i>=0;i--)if(KIND_ORDER[i][0]==='p')KIND_ORDER.splice(i,1);
   photos.forEach((d,i)=>{const k='p'+(i+1),c=v=>C(...v);
-    KINDS[k]={...KINDS.a,name:`写真 ${i+1}`,W:d.hw*1.02,earY:d.earY??0,earZ:d.earZ??-.06,skin:c(d.skin),hair:c(d.hair),lip:c(d.lip),line:PHOTO_LINES[i%4],acc:PHOTO_LINES[i%4],
-      photo:{pts:Float32Array.from(d.pts),tris:d.tris,cols:d.cols.map(c),hw:d.hw,hairR:d.hairR||null,hg:d.hg?hairGrid(d.hg):null,rs:d.rs||null,sh:d.sh||null},thumb:d.thumb};
+    KINDS[k]={...KINDS.a,name:`写真 ${i+1}`,W:d.hw*1.02,earY:d.earY??0,earZ:d.earZ??-.06,skin:c(d.skin),hair:c(d.hair),lip:c(d.lip),shirt:d.shirt?c(d.shirt):KINDS.a.shirt,neck:d.neck?c(d.neck):null,ears:d.ears||null,line:PHOTO_LINES[i%4],acc:PHOTO_LINES[i%4],
+      photo:{pts:Float32Array.from(d.pts),tris:d.tris,cols:d.cols.map(c),hw:d.hw,hairR:d.hairR||null,hg:d.hg?hairGrid(d.hg):null,rs:d.rs||null,sc:d.sc?sideGrid(d.sc):null,ovc:d.ovc?d.ovc.map(unhex3):null},thumb:d.thumb};
     KIND_ORDER.push(k);});
 }
 try{photos=JSON.parse(localStorage.getItem('endless-human-photos')||'[]');}catch(e){photos=[];}
