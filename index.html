@@ -133,7 +133,7 @@ input[type=number]{width:110px;background:#1b1b20;border:1px solid var(--line);b
 <script src="mp4-muxer.js"></script>
 <script>
 'use strict';
-const VERSION = '1.12.0';
+const VERSION = '1.13.0';
 
 // ---------- 乱数・小道具 ----------
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
@@ -898,12 +898,22 @@ const VOWELS={a:{at:[.9,.2],sh:[1,1,0]},i:{at:[0,1],sh:[.28,1.25,0]},u:{at:[0,.4
 // 母音は近さで重みをつけて混ぜる（形がなめらかに移る）。声が小さいときはふつうの形へ戻す
 function mouthShape(sim){
   const a=mouthOpen(sim),t=sim.time;let o,f;
+  if(snd&&snd.mtl&&snd.mtl.length){const tt=(t+aoff())%snd.buf.duration,L=snd.mtl;let lo=0,hi=L.length-1,k=-1;
+    while(lo<=hi){const m=(lo+hi)>>1;if(L[m].t0<=tt){k=m;lo=m+1;}else hi=m-1;}
+    if(k>=0&&tt<L[k].t1)return lyricMouth(L,k,tt,a);}
   if(snd&&snd.vow){const k=Math.min(snd.vow.op.length-1,Math.floor(((t+aoff())%snd.buf.duration)*60));o=snd.vow.op[k];f=snd.vow.fr[k];}
   else{const v='aiueo'[hash(sim.seed,Math.floor(t*2.2),9)%5];[o,f]=VOWELS[v].at;}
   let ws=0,sh=[0,0,0],best='a',bd=9;
   for(const v in VOWELS){const[vo,vf]=VOWELS[v].at,d=(o-vo)**2+(f-vf)**2,w=Math.exp(-d/.05);ws+=w;VOWELS[v].sh.forEach((x,q)=>sh[q]+=x*w);if(d<bd){bd=d;best=v;}}
   sh=sh.map(x=>x/ws);const g=Math.min(1,a*2.5);
   return{open:a*sh[0],wid:1+(sh[1]-1)*g,rnd:sh[2]*g,v:best};
+}
+// 歌詞の音から口の形：母音の形へ 0.06 秒で移る。ン は少しだけ開け、ッ は閉じる。唇を閉じてから出す音は、出だしの 0.05 秒閉じる。
+// 開く大きさは声の大きさで、声が止まれば閉じる
+function moraShape(m,tt){if(m.lip&&tt-m.t0<.05)return[0,1,0,'m'];if(m.v==='n')return[.15,1,0,'n'];if(m.v==='q')return[0,1,0,'q'];const s=VOWELS[m.v].sh;return[s[0],s[1],s[2],m.v];}
+function lyricMouth(L,k,tt,a){
+  const cur=moraShape(L[k],tt),prv=k>0&&L[k-1].t1>=L[k].t0-.01?moraShape(L[k-1],L[k-1].t1):[0,1,0,'.'],u=smooth(clamp((tt-L[k].t0-(L[k].lip?.05:0))/.06,0,1)),sh=[0,1,2].map(q=>lerp(prv[q],cur[q],cur[3]==='m'?1:u));
+  const g=a<.04?a/.04*.45:Math.min(1,Math.max(a,.3)*1.5);return{open:sh[0]*g,wid:1+(sh[1]-1)*g,rnd:sh[2]*g,v:g>.2?cur[3]:'.'};
 }
 // いまの口の開き（0〜1）。歌詞があれば、歌詞の出ている間だけ動かす。曲がないときは、それらしく動かす
 function mouthOpen(sim){
@@ -1051,9 +1061,55 @@ const cleanLyrics=a=>a.map(e=>({...e,text:e.text.trim()})).filter(e=>e.text&&!/^
 async function loadLyrics(file){
   if(!snd){$('#ainfo').textContent='先に音のファイルを入れてください。';return;}
   try{snd.lyrics=parseLyricsText(await file.text());snd.lyricsFrom=file.name;}catch(e){console.error(e);snd.lyrics=[];}
-  showAudio();
+  showAudio();buildLyricMouth();
 }
 const loadScript=src=>new Promise((ok,ng)=>{const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=ng;document.head.appendChild(s);});
+// ---------- 歌詞から口の形 ----------
+// 歌詞の行を音（かなは 1 拍、英語は母音ごと）に分け、行の時刻の中で、声の大きさが立ち上がる所へ順に置く。
+// 漢字の読みは同梱の kuromoji で出す（歌詞に漢字があるときだけ読み込む）。英語は SAM（同梱）の発音記号から母音を取る
+const KANA_V={};[['a','アカサタナハマヤラワガザダバパァャヮ'],['i','イキシチニヒミリギジヂビピィ'],['u','ウクスツヌフムユルグズヅブプゥュヴ'],['e','エケセテネヘメレゲゼデベペェ'],['o','オコソトノホモヨロヲゴゾドボポォョ']].forEach(([v,cs])=>{for(const c of cs)KANA_V[c]=v;});
+const LIP_KANA='マミムメモバビブベボパピプペポ',SMALL_KANA='ァィゥェォャュョヮ',KANJI=/[一-鿿々]/;
+const toKata=t=>t.replace(/[ぁ-ゖ]/g,c=>String.fromCharCode(c.charCodeAt(0)+0x60));
+// かなを拍ごとに：v は母音（n＝ン・q＝ッ）、lip は唇を閉じてから出す音（マ行・バ行・パ行）。小さいャュョなどは前の拍の母音を変える
+function kanaMorae(t){const out=[];for(const c of toKata(t)){
+  if(SMALL_KANA.includes(c)&&out.length){out[out.length-1].v=KANA_V[c];continue;}
+  if(c==='ー'){if(out.length)out.push({v:out[out.length-1].v,lip:false});continue;}
+  if(c==='ン'){out.push({v:'n',lip:false});continue;}if(c==='ッ'){out.push({v:'q',lip:false});continue;}
+  if(KANA_V[c])out.push({v:KANA_V[c],lip:LIP_KANA.includes(c)});}return out;}
+// SAM の発音記号を音ごとに分ける（2 文字の音を先に。数字は強さなので前の音に付ける）と、音ごとの口（あいうえお・m は唇を閉じる）
+const SAM_PH=['IY','IH','EH','AE','AA','AH','AO','UH','AX','IX','ER','UX','OH','RX','LX','WX','YX','WH','EY','AY','OY','AW','OW','UW','NX','ZH','DH','SH','TH','/H','/C','CH','DX','R','L','W','Y','M','N','B','D','G','J','Z','V','S','F','T','P','K','Q'];
+const PH_MOUTH={IY:'i',IH:'i',IX:'i',EY:'e',EH:'e',ER:'e',AE:'a',AA:'a',AH:'a',AX:'a',AY:'a',AW:'a',AO:'o',OH:'o',OW:'o',OY:'o',UH:'u',UX:'u',UW:'u',M:'m',B:'m',P:'m'};
+function samTokens(ph){const t=[];let i=0;while(i<ph.length){const c=ph[i];if(/[0-9]/.test(c)&&t.length){i++;continue;}
+  const two=ph.slice(i,i+2),m=SAM_PH.includes(two)?two:SAM_PH.includes(c)?c:null;t.push(m);i+=m?m.length:1;}return t;}
+// 英語の単語：母音ごとに 1 音（前に M・B・P があれば唇を閉じてから）
+function englishMorae(w){let ph='';try{ph=window.SamJs?SamJs.convert(w)||'':'';}catch(e){}const out=[];let lip=false;
+  for(const p of samTokens(ph)){const m=PH_MOUTH[p];if(m==='m'){lip=true;continue;}if(VOWELS[m]){out.push({v:m,lip});lip=false;}}return out;}
+let kmTok=null;
+async function kuromojiTokenizer(){if(kmTok)return kmTok;if(!window.kuromoji)await loadScript('vendor/kuromoji/kuromoji.js');
+  return kmTok=await new Promise((ok,ng)=>kuromoji.builder({dicPath:'vendor/kuromoji/dict/'}).build((e,t)=>e?ng(e):ok(t)));}
+// 1 行を音の並びに。漢字のまじる所は kuromoji で読み（発音。助詞の「は」は「ワ」）を出す
+async function lineMorae(text){const out=[];if(!window.SamJs&&/[A-Za-z]/.test(text))await loadScript('vendor/samjs.min.js');
+  for(const p of text.match(/[A-Za-z']+|[^A-Za-z']+/g)||[]){
+    if(/^[A-Za-z']+$/.test(p))out.push(...englishMorae(p));
+    else if(KANJI.test(p)){const tk=await kuromojiTokenizer();for(const x of tk.tokenize(p))out.push(...kanaMorae(x.pronunciation||x.reading||x.surface_form));}
+    else out.push(...kanaMorae(p));}
+  return out;}
+// 行の中で、声の大きさが立ち上がる所（0.05 秒前からの増え方の山）を音の数だけ強い順に選び（0.09 秒より近いものは取らない）、音を順に置く。
+// 山が足りなければ、いちばん長い間を半分に割って足す
+function alignMorae(mo,t0,t1,env){
+  const n=mo.length;if(!n)return[];const i0=Math.floor(t0*60),i1=Math.min(env.length-2,Math.floor(t1*60)),d=i=>env[i]-env[i-3],pk=[];
+  for(let i=Math.max(4,i0+3);i<i1;i++){const o=d(i);if(o>.02&&o>=d(i-1)&&o>=d(i+1))pk.push([i/60,o]);}
+  pk.sort((a,b)=>b[1]-a[1]);const on=[t0];
+  for(const[t]of pk){if(on.length>=n)break;if(on.every(x=>Math.abs(x-t)>.09))on.push(t);}
+  on.sort((a,b)=>a-b);
+  while(on.length<n){let j=0,g=0;for(let k=0;k<on.length;k++){const e=(k+1<on.length?on[k+1]:t1)-on[k];if(e>g){g=e;j=k;}}on.splice(j+1,0,on[j]+g/2);}
+  return mo.map((m,k)=>({...m,t0:on[k],t1:k+1<n?on[k+1]:t1}));}
+async function buildLyricMouth(){
+  const s=snd;if(!s)return;s.mtl=null;if(!s.lyrics||!s.lyrics.length)return;
+  s.mtlBusy=true;showAudio();const tl=[];
+  try{for(const l of s.lyrics){if(l.t1-l.t0<.15)continue;tl.push(...alignMorae(await lineMorae(l.text),l.t0,l.t1,s.env));}s.mtl=tl;}
+  catch(e){console.error(e);s.mtlErr=true;}
+  s.mtlBusy=false;if(snd===s)showAudio();}
 async function decodeOpusMp4(ab){
   const{opt,packets,skip}=mp4Opus(ab);
   if(!window['opus-decoder'])await loadScript('opus-decoder.min.js');
@@ -1082,13 +1138,14 @@ async function loadAudio(file){
   try{lyrics=mp4Lyrics(await file.arrayBuffer());}catch(e){}
   clearAudio(true);
   snd={buf,name:file.name,lyrics,env:voiceEnv(buf)};snd.vow=voiceVowel(buf,snd.env);
-  cfg.aoff=0;cfg.minutes=Math.max(1,Math.floor(buf.duration))/60;save();renderUI();restart();showAudio();
+  cfg.aoff=0;cfg.minutes=Math.max(1,Math.floor(buf.duration))/60;save();renderUI();restart();showAudio();buildLyricMouth();
 }
 function clearAudio(quiet){player.stop();snd=null;if(!quiet)showAudio();}
 function showAudio(){
   $('#aclear').style.display=snd?'':'none';
   $('#lyrbox').style.display=snd?'':'none';
   if(snd)$('#linfo').textContent=snd.lyrics.length?`${snd.lyricsFrom?'「'+snd.lyricsFrom+'」の':'曲に入っていた'}歌詞（${snd.lyrics.length}行）を、画面の飾りがあるときはメッセージ欄に、ないときは画面の下に流します。`:'この曲には歌詞が入っていません。.lrc や .srt の歌詞ファイルを入れることもできます。';
+  if(snd&&snd.lyrics.length)$('#linfo').textContent+=snd.mtlBusy?'歌詞の読みを調べています…（漢字があると、最初は読みの辞書〈約18MB〉を読み込みます）':snd.mtl?`口は歌詞の読み（${snd.mtl.length}音）に合わせて動かします。`:snd.mtlErr?'歌詞の読みを調べられなかったので、口は声から見積もります。':'';
   $('#ainfo').textContent=snd?`「${snd.name}」（${fmt(snd.buf.duration)}）を付けて書き出します。曲より長くすると頭から繰り返し、最後の1.5秒で音を小さくして終えます。`:AINFO;
 }
 function sizeCanvas(){const[w,h]=cfg.res.split('x').map(Number);if(out.width!==w||out.height!==h){out.width=w;out.height=h;}}
