@@ -132,7 +132,7 @@ input[type=number]{width:110px;background:#1b1b20;border:1px solid var(--line);b
 <script src="mp4-muxer.js"></script>
 <script>
 'use strict';
-const VERSION = '1.9.0';
+const VERSION = '1.10.0';
 
 // ---------- 乱数・小道具 ----------
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
@@ -256,6 +256,8 @@ function headMesh(K,o){
       // 写真の顔のときは、作りものの頭の前を奥へ下げて、写真の顔の後ろに隠す
       if(ph&&p[2]>0)p=[p[0],p[1],p[2]*.7];
       // 口を開ける：唇より下の前側を下げる（あごが落ちる）
+      // 母音の形：口のまわりを横へ広げる（い・え）か、すぼめて前へ出す（う・お）
+      if(!ph&&p[2]>0&&(o.wid&&o.wid!==1||o.rnd)){const w=Math.exp(-((p[0]/.3)**2+((yb-MOUTH_Y)/.16)**2))*clamp(p[2]/K.D*1.6,0,1);p=[p[0]*(1+((o.wid||1)-1)*w)*(1-.25*(o.rnd||0)*w),p[1],p[2]+.06*(o.rnd||0)*w];}
       if(!ph&&o.open>0&&yb<MOUTH_Y&&p[2]>0){const w=Math.exp(-((p[0]/.32)**4))*clamp(p[2]/K.D*1.6,0,1),f=clamp((MOUTH_Y-yb)/.12,0,1);
         p=[p[0],p[1]-o.open*.17*w*(.35+.65*f),p[2]-o.open*.04*w];}
       if(jr){const a=o.jit;p=p.map(v=>v+(jr()-.5)*a);}
@@ -328,7 +330,10 @@ function fan(m,pts,col,dz){
 // 写真の顔：口・まばたき・目線・ぶれを点に当ててから、三角形を写真の色で描く
 function photoFace(m,K,o){
   const F=K.photo,n=F.pts.length/3,P=new Array(n),y0=(F.pts[13*3+1]+F.pts[14*3+1])/2,chinY=F.pts[152*3+1],jr=o.jit?mulberry32(o.seed+1):null;
+  const mw=Math.abs(F.pts[61*3]-F.pts[291*3])/2,mwd=o.wid||1,mrn=o.rnd||0;
   for(let i=0;i<n;i++){let x=F.pts[i*3],y=F.pts[i*3+1],z=F.pts[i*3+2];
+    // 母音の形：口のまわりを横へ広げる（い・え）か、すぼめて唇を前へ出す（う・お）
+    if(mwd!==1||mrn){const w=Math.exp(-((x/(mw*1.6))**2+((y-y0)/(mw*.9))**2)),wl=Math.exp(-((x/(mw*1.15))**2+((y-y0)/(mw*.5))**2));x*=(1+(mwd-1)*w)*(1-.35*mrn*w);z+=.1*mrn*wl;}
     // 口を開ける：唇の合わせ目より下（下唇とあご）を、顔の中ほどほど大きく下げる（下唇とあごはほぼ一緒に動き、伸びるのは口の端のまわり）
     // （写真は口を閉じているので、下唇の内側のふちは上唇と同じ高さにある。それも下へ動かす。上唇の内側と口の端は動かさない）
     if(o.open>0&&(y<y0-.004||LIP_LO.has(i))&&!LIP_UP.has(i)&&i!==78&&i!==308&&y>chinY-.25){const w=Math.exp(-((x/(F.hw*.55))**4)),f=clamp((y0-y)/.06,0,1);y-=o.open*.2*w*(.85+.15*f);z-=o.open*.03*w;}
@@ -680,11 +685,11 @@ class Head3D{
     const gl=this.gl,cv=this.cv;
     if(cv.width!==w||cv.height!==h){cv.width=w;cv.height=h;}
     gl.viewport(0,0,w,h);gl.bindVertexArray(this.vao);gl.clearColor(0,0,0,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.enable(gl.DEPTH_TEST);
-    const K=sim.region.K,t=sim.time,hit=t-sim.tImp,open=mouthOpen(sim),glitch=hit>-CRASH.lead?smooth(clamp((hit+CRASH.lead)/CRASH.lead,0,1)):0;
+    const K=sim.region.K,t=sim.time,hit=t-sim.tImp,ms=mouthShape(sim),open=ms.open,glitch=hit>-CRASH.lead?smooth(clamp((hit+CRASH.lead)/CRASH.lead,0,1)):0;
     // 顔の形（崩れる前はぶれ、崩れたら三角形ごとに飛び散る）
     let d;
     if(hit>0)d=shatter(headMesh(K,{open:0,blink:0,gaze:[0,0]}),hit,hash(sim.seed,61));
-    else d=headMesh(K,{open,blink:sim.blink(),gaze:sim.gaze(),jit:glitch>0?.06*glitch*glitch:0,seed:hash(sim.seed,Math.floor(t*12))});
+    else d=headMesh(K,{open,wid:ms.wid,rnd:ms.rnd,blink:sim.blink(),gaze:sim.gaze(),jit:glitch>0?.06*glitch*glitch:0,seed:hash(sim.seed,Math.floor(t*12))});
     // 頭のゆれ：うなずき・首振り（歌うと少しうなずく）
     const nod=.03*Math.sin(t*.8)+.05*open,yaw=.06*Math.sin(t*.31),rl=.02*Math.sin(t*.47);
     const cy=Math.cos(yaw),syw=Math.sin(yaw),cp=Math.cos(nod),sp=Math.sin(nod),cr=Math.cos(rl),sr=Math.sin(rl);
@@ -835,6 +840,44 @@ function voiceEnv(buf){
   const sorted=Array.from(e).sort((a,b)=>a-b),ref=sorted[Math.floor(M*.95)]||1;
   let sm=0;for(let i=0;i<M;i++){const v=Math.min(1.2,e[i]/ref);sm+=(v-sm)*(v>sm?.6:.2);e[i]=sm;}
   return e;
+}
+// 母音を曲から見積もる：声の高さの帯を 4 つ（400・820・1250・2300Hz のまわり）に分けて 1/60 秒ごとの強さを取り、
+// 口の開き（820 が 400 より強いほど開く。母音の第1フォルマント）と、口の横への引き（2300 が 1250 より強いほど。第2フォルマント）を出す。
+// 第2フォルマントは 1100〜3100Hz の 6 つの細い帯のうち、傾きを直していちばん強い所（山の位置）で見積もる。
+// 曲ごとに範囲をならし、声の小さい所・山のはっきりしない所では前の値を保つ。楽器も混ざるので、だいたいの見積もり
+function voiceVowel(buf,env){
+  const sr=buf.sampleRate,N=buf.length,ch=[...Array(buf.numberOfChannels)].map((_,c)=>buf.getChannelData(c)),hop=Math.round(sr/60),M=Math.ceil(N/hop);
+  const bp=(f0,Q)=>{const w=2*Math.PI*f0/sr,al=Math.sin(w)/(2*Q),a0=1+al;return{f0,b0:al/a0,b2:-al/a0,a1:-2*Math.cos(w)/a0,a2:(1-al)/a0,x1:0,x2:0,y1:0,y2:0};};
+  // 0・1：第1フォルマント（400・820）、2〜：第2フォルマントを探す帯（1100〜3100Hz。高い声のあの第1フォルマント〈約950Hz〉が入らないように）
+  const F=[bp(400,1.2),bp(820,1.5),...[1150,1400,1700,2050,2450,2900].map(f=>bp(f,4))],B=F.length,E=F.map(()=>new Float32Array(M)),acc=new Float64Array(B);let k=0,cnt=0;
+  for(let i=0;i<N;i++){let x=0;for(const c of ch)x+=c[i];x/=ch.length;
+    for(let b=0;b<B;b++){const f=F[b],y=f.b0*x+f.b2*f.x2-f.a1*f.y1-f.a2*f.y2;f.x2=f.x1;f.x1=x;f.y2=f.y1;f.y1=y;acc[b]+=y*y;}
+    if(++cnt===hop){for(let b=0;b<B;b++){E[b][k]=acc[b];acc[b]=0;}k++;cnt=0;}}
+  // 1/60 秒ごとの生の値：開き（820 の帯の割合）と第2フォルマントの対数。山がはっきりしない所（雑音・楽器が勝っている所）と声の小さい所は使わない
+  const ro=new Float32Array(M),rf=new Float32Array(M),ok=new Uint8Array(M),lf=F.slice(2).map(f=>Math.log(f.f0));
+  for(let i=0;i<M;i++){const l=E[0][i],m=E[1][i],g=[];for(let b=2;b<B;b++)g.push(E[b][i]*(F[b].f0/1000)**1.5);
+    // 声の音は高い所ほど弱いので、周波数の 1.5 乗をかけて傾きを直し（2 乗だと雑音の高い所が勝ちやすい）、いちばん強い帯と両どなりで山の位置を見積もる
+    const j=g.indexOf(Math.max(...g)),med=[...g].sort((x,y)=>x-y)[g.length>>1];let lp=lf[j];
+    if(j>0&&j<g.length-1){const y0=Math.log(g[j-1]+1e-20),y1=Math.log(g[j]+1e-20),y2=Math.log(g[j+1]+1e-20),dd=y0-2*y1+y2;if(dd<0)lp+=clamp(.5*(y0-y2)/dd,-.5,.5)*(lf[j+1]-lf[j-1])/2;}
+    ro[i]=m/(l+m+1e-12);rf[i]=lp;ok[i]=env[i]>.04&&g[j]>med*1.5?1:0;}
+  // 曲（歌い手）ごとに、使える所の 5〜95% を 0〜1 にならす（声の高さ・男女の違いをならす）。使えない所は前の値を保ち、なめらかにする
+  const rng=a=>{const v=[];for(let i=0;i<M;i++)if(ok[i])v.push(a[i]);v.sort((x,y)=>x-y);return v.length>10?[v[Math.floor(v.length*.05)],v[Math.floor(v.length*.95)]]:null;};
+  const Ro=rng(ro)||[.15,.85],Rf=rng(rf)||[Math.log(1000),Math.log(2300)],op=new Float32Array(M),fr=new Float32Array(M);let so=.5,sf=.5;
+  for(let i=0;i<M;i++){if(ok[i]){so+=(clamp((ro[i]-Ro[0])/(Ro[1]-Ro[0]||1),0,1)-so)*.35;sf+=(clamp((rf[i]-Rf[0])/(Rf[1]-Rf[0]||1),0,1)-sf)*.35;}op[i]=so;fr[i]=sf;}
+  return{op,fr,E,F:F.map(f=>f.f0)};
+}
+// 母音ごとの、見積もりの位置（口の開き・横への引き。作った声で測った値に合わせた）と口の形（あごの開き・口の幅・唇のすぼめ）
+const VOWELS={a:{at:[.9,.2],sh:[1,1,0]},i:{at:[0,1],sh:[.28,1.25,0]},u:{at:[0,.4],sh:[.3,.66,1]},e:{at:[.3,.75],sh:[.55,1.15,0]},o:{at:[.45,0],sh:[.75,.74,.8]}};
+// いまの口の形：開き（0〜1）・幅（1 がふつう）・すぼめ（0〜1）と、いちばん近い母音。曲があれば曲から、なければ音節ごとに母音をでたらめに選ぶ。
+// 母音は近さで重みをつけて混ぜる（形がなめらかに移る）。声が小さいときはふつうの形へ戻す
+function mouthShape(sim){
+  const a=mouthOpen(sim),t=sim.time;let o,f;
+  if(snd&&snd.vow){const k=Math.min(snd.vow.op.length-1,Math.floor(((t+aoff())%snd.buf.duration)*60));o=snd.vow.op[k];f=snd.vow.fr[k];}
+  else{const v='aiueo'[hash(sim.seed,Math.floor(t*2.2),9)%5];[o,f]=VOWELS[v].at;}
+  let ws=0,sh=[0,0,0],best='a',bd=9;
+  for(const v in VOWELS){const[vo,vf]=VOWELS[v].at,d=(o-vo)**2+(f-vf)**2,w=Math.exp(-d/.05);ws+=w;VOWELS[v].sh.forEach((x,q)=>sh[q]+=x*w);if(d<bd){bd=d;best=v;}}
+  sh=sh.map(x=>x/ws);const g=Math.min(1,a*2.5);
+  return{open:a*sh[0],wid:1+(sh[1]-1)*g,rnd:sh[2]*g,v:best};
 }
 // いまの口の開き（0〜1）。歌詞があれば、歌詞の出ている間だけ動かす。曲がないときは、それらしく動かす
 function mouthOpen(sim){
@@ -1012,7 +1055,7 @@ async function loadAudio(file){
   let lyrics=[];
   try{lyrics=mp4Lyrics(await file.arrayBuffer());}catch(e){}
   clearAudio(true);
-  snd={buf,name:file.name,lyrics,env:voiceEnv(buf)};
+  snd={buf,name:file.name,lyrics,env:voiceEnv(buf)};snd.vow=voiceVowel(buf,snd.env);
   cfg.aoff=0;cfg.minutes=Math.max(1,Math.floor(buf.duration))/60;save();renderUI();restart();showAudio();
 }
 function clearAudio(quiet){player.stop();snd=null;if(!quiet)showAudio();}
